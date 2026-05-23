@@ -4,10 +4,10 @@ Finance Hack: GST (Goods and Services Tax) Management System
 Handles invoice generation, tax calculation, and return filing
 """
 
-from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Dict, List
 
 
 class GSTType(Enum):
@@ -33,13 +33,13 @@ class LineItem:
     quantity: float
     unit_price: float
     gst_rate: float = 0.18
-    
+
     def calculate_amount(self) -> float:
         return self.quantity * self.unit_price
-    
+
     def calculate_gst(self) -> float:
         return self.calculate_amount() * self.gst_rate
-    
+
     def calculate_total(self) -> float:
         return self.calculate_amount() + self.calculate_gst()
 
@@ -55,29 +55,29 @@ class Invoice:
     customer_gstin: str = ""
     gst_type: GSTType = GSTType.INTRA_STATE
     items: List[LineItem] = field(default_factory=list)
-    
+
     def add_item(self, item: LineItem) -> None:
         """Add line item to invoice"""
         self.items.append(item)
-    
+
     def calculate_subtotal(self) -> float:
         """Calculate subtotal before tax"""
         return sum(item.calculate_amount() for item in self.items)
-    
+
     def calculate_total_gst(self) -> float:
         """Calculate total GST"""
         return sum(item.calculate_gst() for item in self.items)
-    
+
     def calculate_invoice_total(self) -> float:
         """Calculate total invoice amount"""
         return self.calculate_subtotal() + self.calculate_total_gst()
-    
+
     def generate_invoice(self) -> Dict:
         """Generate formatted invoice"""
         subtotal = self.calculate_subtotal()
         total_gst = self.calculate_total_gst()
         invoice_total = self.calculate_invoice_total()
-        
+
         # For intra-state: SGST = CGST = total_gst / 2
         if self.gst_type == GSTType.INTRA_STATE:
             sgst = total_gst / 2
@@ -87,7 +87,7 @@ class Invoice:
             sgst = 0
             cgst = 0
             igst = total_gst
-        
+
         return {
             "invoice_number": self.invoice_number,
             "date": self.date.strftime("%Y-%m-%d"),
@@ -126,29 +126,29 @@ class GSTReturn:
     """GST Return filing"""
     return_month: str  # Format: YYYY-MM
     supply_type: str   # B2B, B2C, etc.
-    
+
     outward_supplies: Dict[str, float] = field(default_factory=dict)  # {gst_rate: amount}
     inward_supplies: Dict[str, float] = field(default_factory=dict)   # {gst_rate: amount}
     input_tax_credits: Dict[str, float] = field(default_factory=dict) # {gst_rate: amount}
-    
+
     def add_outward_supply(self, gst_rate: float, amount: float) -> None:
         """Add outward supply"""
         if gst_rate not in self.outward_supplies:
             self.outward_supplies[gst_rate] = 0
         self.outward_supplies[gst_rate] += amount
-    
+
     def add_inward_supply(self, gst_rate: float, amount: float) -> None:
         """Add inward (purchase) supply"""
         if gst_rate not in self.inward_supplies:
             self.inward_supplies[gst_rate] = 0
         self.inward_supplies[gst_rate] += amount
-    
+
     def add_itc(self, gst_rate: float, amount: float) -> None:
         """Add input tax credit"""
         if gst_rate not in self.input_tax_credits:
             self.input_tax_credits[gst_rate] = 0
         self.input_tax_credits[gst_rate] += amount
-    
+
     def calculate_gst_liability(self) -> Dict:
         """Calculate GST liability"""
         liability = {}
@@ -162,12 +162,12 @@ class GSTReturn:
                 "net_liability": max(0, net_liability)
             }
         return liability
-    
+
     def generate_return_summary(self) -> Dict:
         """Generate GST return summary"""
         liability = self.calculate_gst_liability()
-        total_gst_payable = sum(l["net_liability"] for l in liability.values())
-        
+        total_gst_payable = sum(entry["net_liability"] for entry in liability.values())
+
         return {
             "return_month": self.return_month,
             "supply_type": self.supply_type,
@@ -189,20 +189,20 @@ if __name__ == "__main__":
         customer_gstin="09ABCDS1111A1Z5",
         gst_type=GSTType.INTRA_STATE
     )
-    
+
     # Add items
     invoice.add_item(LineItem("Furniture", "9402", 5, 1000, 0.18))
     invoice.add_item(LineItem("Office Supplies", "9990", 10, 100, 0.18))
-    
+
     # Generate invoice
     inv_data = invoice.generate_invoice()
     print(f"Invoice Total: ₹{inv_data['invoice_total']}")
-    
+
     # Create GST return
     gst_return = GSTReturn("2025-05", "B2B")
     gst_return.add_outward_supply(0.18, 10000)
     gst_return.add_itc(0.18, 2000)
-    
+
     # Generate return summary
     summary = gst_return.generate_return_summary()
     print(f"GST Payable: ₹{summary['total_gst_payable']}")
