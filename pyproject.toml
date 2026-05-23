@@ -1,0 +1,15 @@
+[project]
+name = "finance-hacks"
+version = "0.1.0"
+description = "Educational finance domain utilities (accounts, GST, payroll) in pure Python stdlib."
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+# Existing code uses typing.Dict/List/Optional rather than PEP 585 builtins;
+# do not auto-rewrite to keep the style consistent across the codebase.
+ignore = ["UP006", "UP035"]
