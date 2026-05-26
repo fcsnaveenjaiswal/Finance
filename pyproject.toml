@@ -8,6 +8,12 @@ requires-python = ">=3.10"
 line-length = 100
 target-version = "py310"
 
+[tool.pytest.ini_options]
+# Tests import the root modules directly (e.g. `from accounts_hack import ...`).
+# Put the repo root on sys.path so plain `pytest` collects them the same way
+# `python -m unittest discover` does — without needing a tests/ package.
+pythonpath = ["."]
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
 # Existing code uses typing.Dict/List/Optional rather than PEP 585/604 builtins;
