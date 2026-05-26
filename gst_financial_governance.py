@@ -8,10 +8,11 @@ incorporating 15 core components for comprehensive GST compliance,
 financial management, and litigation support.
 """
 
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+from typing import Dict, List, Optional
 
 
 class TransactionType(Enum):
@@ -46,13 +47,13 @@ class CentralizedFinancialRepository:
     sync_timestamp: datetime = field(default_factory=datetime.now)
     erp_integrated: bool = False
     real_time_sync: bool = False
-    
+
     def add_transaction(self, transaction: Dict) -> Dict:
         """Add transaction to centralized repository"""
         transaction['added_timestamp'] = datetime.now().isoformat()
         self.books_of_accounts.append(transaction)
         return {"status": "Transaction recorded in centralized repository", "transaction_id": transaction.get("id")}
-    
+
     def get_repository_status(self) -> Dict:
         """Get current repository status"""
         return {
@@ -83,7 +84,7 @@ class ITCRepositoryManagement:
     gstr2b_mismatch: float = 0
     itc_ageing: Dict = field(default_factory=dict)
     reversal_tracking: List[Dict] = field(default_factory=list)
-    
+
     def calculate_itc_eligibility(self) -> Dict:
         """Calculate ITC eligibility per GST rules"""
         return {
@@ -95,7 +96,7 @@ class ITCRepositoryManagement:
             "net_itc_claimable": self.itc_eligible - self.itc_blocked_section_17_5,
             "gstr2b_reconciliation": f"Matched: ₹{self.gstr2b_matched}, Mismatch: ₹{self.gstr2b_mismatch}"
         }
-    
+
     def identify_itc_reversals(self) -> List[Dict]:
         """Identify ITC reversals required"""
         reversals = []
@@ -120,7 +121,7 @@ class OutputTaxLiabilityRepository:
     sez_transactions: List[Dict] = field(default_factory=list)
     rcm_transactions: List[Dict] = field(default_factory=list)
     exempt_nil_transactions: List[Dict] = field(default_factory=list)
-    
+
     def compute_tax_liability(self) -> Dict:
         """Compute total output tax liability by classification"""
         liability = {
@@ -134,17 +135,17 @@ class OutputTaxLiabilityRepository:
             "liability_breakdown": {},
             "tax_rate_validation": "✓ Completed"
         }
-        
-        liability["total_liability"] = (liability['b2b_liability'] + liability['b2c_liability'] + 
+
+        liability["total_liability"] = (liability['b2b_liability'] + liability['b2c_liability'] +
                                        liability['sez_liability'] + liability['rcm_liability'])
-        
+
         return liability
-    
+
     def get_auto_classification_status(self) -> Dict:
         """Get auto-classification status of transactions"""
         return {
-            "total_classified": (len(self.b2b_transactions) + len(self.b2c_transactions) + 
-                               len(self.export_transactions) + len(self.sez_transactions) + 
+            "total_classified": (len(self.b2b_transactions) + len(self.b2c_transactions) +
+                               len(self.export_transactions) + len(self.sez_transactions) +
                                len(self.rcm_transactions) + len(self.exempt_nil_transactions)),
             "classification_accuracy": "98.5%",
             "manual_review_required": 0,
@@ -165,7 +166,7 @@ class GSTReconciliationRepository:
     e_invoice_total: float = 0
     reconciliation_status: str = "Pending"
     mismatches: List[Dict] = field(default_factory=list)
-    
+
     def reconcile_all_sources(self) -> Dict:
         """Reconcile all GST data sources"""
         return {
@@ -211,11 +212,11 @@ class VendorComplianceMonitoring:
     scn_issued: bool = False
     risk_score: float = 0  # 0-100
     itc_exposure: float = 0
-    
+
     def assess_vendor_risk(self) -> Dict:
         """Assess vendor compliance risk"""
         risk_factors = 0
-        
+
         if self.gstr1_filing_status != "Current":
             risk_factors += 20
         if self.gstr3b_filing_status != "Current":
@@ -228,9 +229,9 @@ class VendorComplianceMonitoring:
             risk_factors += 25
         if self.scn_issued:
             risk_factors += 30
-        
+
         self.risk_score = min(risk_factors, 100)
-        
+
         return {
             "vendor": self.vendor_name,
             "gstin": self.vendor_gstin,
@@ -240,7 +241,7 @@ class VendorComplianceMonitoring:
             "itc_at_risk": f"₹{self.itc_exposure:,.0f}",
             "recommended_action": self._get_action()
         }
-    
+
     def _get_action(self) -> str:
         if self.risk_score >= 70:
             return "Consider alternative suppliers, reduce credit exposure"
@@ -264,11 +265,11 @@ class LitigationRepository:
     appeal_filed_date: Optional[datetime] = None
     legal_counsel: str = ""
     documents: List[str] = field(default_factory=list)
-    
+
     def get_litigation_status(self) -> Dict:
         """Get current litigation status and next steps"""
         days_pending = (datetime.now() - self.notice_date).days
-        
+
         return {
             "case_id": self.case_id,
             "notice_number": self.notice_number,
@@ -280,7 +281,7 @@ class LitigationRepository:
             "legal_counsel": self.legal_counsel,
             "documents_attached": len(self.documents)
         }
-    
+
     def _get_next_action(self) -> str:
         if self.current_status == "Notice Received" and self.reply_due_date:
             days_left = (self.reply_due_date - datetime.now()).days
@@ -296,18 +297,18 @@ class LitigationRepository:
 
 class FinancialAnalyticsMIS:
     """7. FINANCIAL ANALYTICS & MIS DASHBOARD"""
-    
+
     def __init__(self):
         self.transactions: List[Dict] = []
         self.itc_data: List[Dict] = []
         self.liability_data: List[Dict] = []
-    
+
     def generate_comprehensive_dashboard(self) -> Dict:
         """Generate comprehensive MIS dashboard"""
-        
+
         total_gst_outflow = sum(t.get('gst', 0) for t in self.transactions)
         itc_utilization = sum(t.get('itc_claimed', 0) for t in self.itc_data) / max(sum(t.get('itc_available', 0) for t in self.itc_data), 1) * 100
-        
+
         return {
             "dashboard_date": datetime.now().isoformat(),
             "key_metrics": {
@@ -335,7 +336,7 @@ class RefundExportRepository:
     refund_applications: List[Dict] = field(default_factory=list)
     igst_refunds_pending: float = 0
     igst_refunds_received: float = 0
-    
+
     def track_export_refunds(self) -> Dict:
         """Track export refunds and IGST reconciliation"""
         return {
@@ -356,7 +357,7 @@ class ReverseChargeMechanismRepository:
     rcm_monthly_liability: float = 0
     rcm_payments: List[Dict] = field(default_factory=list)
     itc_post_payment: float = 0
-    
+
     def compute_rcm_liability(self) -> Dict:
         """Compute RCM liability and ITC eligibility"""
         return {
@@ -371,12 +372,12 @@ class ReverseChargeMechanismRepository:
 
 class AuditReadinessFramework:
     """10. AUDIT READINESS FRAMEWORK"""
-    
+
     def __init__(self):
         self.documents_repository: Dict = {}
         self.approval_workflow: List[Dict] = []
         self.audit_trail: List[Dict] = []
-    
+
     def initialize_audit_preparation(self) -> Dict:
         """Initialize comprehensive audit readiness"""
         return {
@@ -399,10 +400,10 @@ class AuditReadinessFramework:
 
 class ComplianceCalendarWorkflow:
     """11. COMPLIANCE CALENDAR & WORKFLOW AUTOMATION"""
-    
+
     def generate_annual_calendar(self, year: int) -> Dict:
         """Generate annual GST compliance calendar"""
-        
+
         calendar = {
             "year": year,
             "critical_dates": [
@@ -424,15 +425,15 @@ class ComplianceCalendarWorkflow:
 
 class DataGovernanceControls:
     """12. DATA GOVERNANCE & INTERNAL CONTROLS"""
-    
+
     def __init__(self):
         self.rbac_matrix: Dict = {}
         self.change_logs: List[Dict] = []
         self.fraud_alerts: List[Dict] = []
-    
+
     def implement_governance(self) -> Dict:
         """Implement data governance framework"""
-        
+
         return {
             "role_based_access": {
                 "data_owner": ["Full access"],
@@ -452,11 +453,11 @@ class DataGovernanceControls:
 
 class StrategicBenefits:
     """15. STRATEGIC BENEFITS SUMMARY"""
-    
+
     @staticmethod
     def get_benefits_summary() -> Dict:
         """Get strategic benefits of GST Financial Governance Architecture"""
-        
+
         return {
             "benefits": {
                 "litigation_risk": "↓ Significantly Reduced",
@@ -488,7 +489,7 @@ if __name__ == "__main__":
     print("INTEGRATED GST FINANCIAL GOVERNANCE ARCHITECTURE")
     print("Enterprise GST Control Repository Framework")
     print("="*90 + "\n")
-    
+
     # 1. Centralized Repository
     central_repo = CentralizedFinancialRepository(
         repository_id="REPO001",
@@ -498,7 +499,7 @@ if __name__ == "__main__":
     )
     print("1. CENTRALIZED REPOSITORY STATUS:")
     print(json.dumps(central_repo.get_repository_status(), indent=2))
-    
+
     # 2. Vendor Compliance Monitoring
     vendor = VendorComplianceMonitoring(
         vendor_gstin="09ABCDS1111A1Z5",
@@ -509,7 +510,7 @@ if __name__ == "__main__":
     )
     print("\n\n5. VENDOR COMPLIANCE ASSESSMENT:")
     print(json.dumps(vendor.assess_vendor_risk(), indent=2))
-    
+
     # 15. Strategic Benefits
     print("\n\n15. STRATEGIC BENEFITS:")
     benefits = StrategicBenefits.get_benefits_summary()
@@ -517,9 +518,7 @@ if __name__ == "__main__":
         print(f"\n{key.upper()}:")
         for metric, val in value.items():
             print(f"  • {metric}: {val}")
-    
+
     print("\n" + "="*90)
     print("✓ GST Financial Governance Architecture Fully Implemented")
     print("="*90)
-
-import json

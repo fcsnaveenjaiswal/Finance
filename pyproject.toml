@@ -1,7 +1,7 @@
 [project]
 name = "finance-hacks"
 version = "0.1.0"
-description = "Educational finance domain utilities (accounts, GST, payroll) in pure Python stdlib."
+description = "Educational finance domain utilities (accounts, GST, payroll, income tax, ICAI) in pure Python stdlib."
 requires-python = ">=3.10"
 
 [tool.ruff]
@@ -10,6 +10,17 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
-# Existing code uses typing.Dict/List/Optional rather than PEP 585 builtins;
+# Existing code uses typing.Dict/List/Optional rather than PEP 585/604 builtins;
 # do not auto-rewrite to keep the style consistent across the codebase.
-ignore = ["UP006", "UP035"]
+ignore = ["UP006", "UP035", "UP045"]
+
+[tool.ruff.lint.per-file-ignores]
+# These larger modules predate the ruff config and embed long legal/document
+# string templates and dict literals where wrapping or stripping in-string
+# whitespace would change rendered output. Exempt only the affected rules;
+# all other lint rules still apply.
+"gst_case_drafting.py" = ["E501", "W291", "W293"]
+"gst_financial_governance.py" = ["E501"]
+"icai_guidance_notes.py" = ["E501"]
+# Blank lines carrying indentation inside multi-line legal-draft templates.
+"income_tax_litigation_repository.py" = ["W291", "W293"]

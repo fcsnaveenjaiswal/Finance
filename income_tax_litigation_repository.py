@@ -15,10 +15,10 @@ Core Philosophy:
 4. Transparent transaction audit trail"
 """
 
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+from typing import Dict, List, Optional, Tuple
 
 
 class AssessmentType(Enum):
@@ -64,7 +64,7 @@ class PenaltySection(Enum):
 @dataclass
 class StatutoryRepository:
     """1. CORE STATUTORY REPOSITORY"""
-    
+
     income_tax_act_1961: Dict[str, List[str]] = field(default_factory=dict)
     income_tax_rules_1962: Dict[str, List[str]] = field(default_factory=dict)
     forms_repository: Dict[str, str] = field(default_factory=dict)
@@ -72,8 +72,8 @@ class StatutoryRepository:
     circulars_notifications: Dict[str, str] = field(default_factory=dict)
     cbdt_instructions: Dict[str, str] = field(default_factory=dict)
     judicial_precedents: Dict[str, Dict] = field(default_factory=dict)
-    
-    def add_case_law(self, section: str, citation: str, judgment_date: str, 
+
+    def add_case_law(self, section: str, citation: str, judgment_date: str,
                      facts: str, ratio: str, authority: str) -> Dict:
         """Add judicial precedent to repository"""
         case_id = f"{section}_{len(self.judicial_precedents)}"
@@ -87,10 +87,10 @@ class StatutoryRepository:
             "added_date": datetime.now().isoformat()
         }
         return {"status": "Case law added", "case_id": case_id}
-    
+
     def search_precedent_by_section(self, section: str) -> List[Dict]:
         """Search precedents by section"""
-        return [p for cid, p in self.judicial_precedents.items() 
+        return [p for cid, p in self.judicial_precedents.items()
                 if p["section"] == section]
 
 
@@ -101,22 +101,22 @@ class StatutoryRepository:
 @dataclass
 class ITRRepository:
     """2. INCOME TAX RETURN REPOSITORY"""
-    
+
     pan: str
     assessment_year: str
     itr_form_type: str  # ITR-1, ITR-2, ITR-3, ITR-4, ITR-5, ITR-6, ITR-7
-    
+
     itr_copies: Dict[str, Dict] = field(default_factory=dict)  # Original + Amended
     json_xml_backups: List[str] = field(default_factory=list)
     computation_sheets: List[Dict] = field(default_factory=list)
     tax_audit_reports: List[str] = field(default_factory=list)
     capital_gain_workings: Dict = field(default_factory=dict)
-    
+
     ais_tis_reconciliation: Dict = field(default_factory=dict)
     form_26as_reconciliation: Dict = field(default_factory=dict)
     supporting_schedules: Dict[str, str] = field(default_factory=dict)
-    
-    def add_itr_filing(self, filing_date: str, itr_data: Dict, 
+
+    def add_itr_filing(self, filing_date: str, itr_data: Dict,
                        is_amended: bool = False) -> Dict:
         """Add ITR filing to repository"""
         filing_id = f"ITR_{self.assessment_year}_{len(self.itr_copies)}"
@@ -128,7 +128,7 @@ class ITRRepository:
             "filing_status": "Accepted"
         }
         return {"status": "ITR filing recorded", "filing_id": filing_id}
-    
+
     def add_computation_sheet(self, description: str, computation: Dict,
                             supporting_doc: List[str]) -> Dict:
         """Add computation sheet for compliance"""
@@ -145,23 +145,23 @@ class ITRRepository:
 @dataclass
 class TDSRepository:
     """TDS REPOSITORY - Form 24Q, 26Q, 27Q, 27EQ"""
-    
+
     deductor_pan: str
     financial_year: str
-    
+
     form_24q_returns: List[Dict] = field(default_factory=list)  # Salary TDS
     form_26q_returns: List[Dict] = field(default_factory=list)  # Other TDS
     form_27q_returns: List[Dict] = field(default_factory=list)  # Corporate
     form_27eq_returns: List[Dict] = field(default_factory=list)  # Equalization Cess
-    
+
     tds_challans: Dict[str, Dict] = field(default_factory=dict)
     fvu_files: List[str] = field(default_factory=list)
     traces_defaults: List[Dict] = field(default_factory=list)
     pan_mismatch_reports: List[Dict] = field(default_factory=list)
     short_deduction_analysis: Dict = field(default_factory=dict)
     interest_computation: Dict = field(default_factory=dict)
-    
-    def track_tds_payment(self, quarter: str, amount: float, 
+
+    def track_tds_payment(self, quarter: str, amount: float,
                          payment_date: str, challan_no: str) -> Dict:
         """Track TDS payment with challan"""
         return {
@@ -172,7 +172,7 @@ class TDSRepository:
             "status": "On Time" if payment_date <= self._get_due_date(quarter) else "Late",
             "verification": "✓ Verified in TRACES"
         }
-    
+
     def _get_due_date(self, quarter: str) -> str:
         """Get TDS deposit due date"""
         due_dates = {
@@ -191,7 +191,7 @@ class TDSRepository:
 @dataclass
 class PortalComplianceRepository:
     """3. INCOMETAX.GOV.IN DIGITAL REPOSITORY"""
-    
+
     pan: str
     portal_login_logs: List[Dict] = field(default_factory=list)
     notices_downloaded: Dict[str, Dict] = field(default_factory=dict)
@@ -199,11 +199,11 @@ class PortalComplianceRepository:
     din_wise_communications: Dict[str, List[Dict]] = field(default_factory=dict)
     e_proceeding_submissions: List[Dict] = field(default_factory=list)
     filed_responses: Dict[str, Dict] = field(default_factory=dict)
-    
+
     refund_status_tracker: Dict = field(default_factory=dict)
     outstanding_demand_records: List[Dict] = field(default_factory=list)
-    
-    def log_portal_notice(self, din: str, notice_type: str, 
+
+    def log_portal_notice(self, din: str, notice_type: str,
                          notice_date: str, pdf_download_date: str) -> Dict:
         """Log notice from portal with timestamps"""
         notice_id = f"NOTICE_{len(self.notices_downloaded)}"
@@ -218,7 +218,7 @@ class PortalComplianceRepository:
             "abridged_note": "Purpose: [To be updated]"
         }
         return {"status": "Notice logged", "notice_id": notice_id}
-    
+
     def log_response_submission(self, notice_id: str, response_file: str,
                                submission_date: str, abridged_note: str) -> Dict:
         """Log response submission with full audit trail"""
@@ -241,24 +241,24 @@ class PortalComplianceRepository:
 @dataclass
 class ScrutinyRepository:
     """4.A SCRUTINY REPOSITORY - Limited, Complete, Faceless, Reassessment"""
-    
+
     case_id: str
     pan: str
     assessment_year: str
     scrutiny_type: AssessmentType
-    
+
     notice_chronology: List[Dict] = field(default_factory=list)
     issue_wise_replies: Dict[str, str] = field(default_factory=dict)
     annexures: Dict[str, str] = field(default_factory=dict)
     evidence_mapping: Dict[str, List[str]] = field(default_factory=dict)
     legal_precedents: List[Dict] = field(default_factory=list)
     submission_index: Dict = field(default_factory=dict)
-    
+
     personal_hearing_scheduled: Optional[datetime] = None
     assessment_order_date: Optional[datetime] = None
     demand_amount: float = 0
-    
-    def add_notice(self, notice_date: str, notice_type: str, 
+
+    def add_notice(self, notice_date: str, notice_type: str,
                   response_due_date: str, issues_raised: List[str]) -> Dict:
         """Add notice with chronology"""
         notice_record = {
@@ -271,7 +271,7 @@ class ScrutinyRepository:
         }
         self.notice_chronology.append(notice_record)
         return {"status": "Notice added to chronology", "position": len(self.notice_chronology)}
-    
+
     def map_evidence_to_issue(self, issue: str, evidence_list: List[str]) -> Dict:
         """Map documentary evidence to specific issues"""
         self.evidence_mapping[issue] = evidence_list
@@ -280,7 +280,7 @@ class ScrutinyRepository:
             "evidence_count": len(evidence_list),
             "status": "✓ Mapped"
         }
-    
+
     def _calculate_days_remaining(self, due_date_str: str) -> int:
         """Calculate days remaining for response"""
         due_date = datetime.strptime(due_date_str, "%d-%m-%Y")
@@ -290,24 +290,24 @@ class ScrutinyRepository:
 @dataclass
 class RectificationRepository:
     """4.B RECTIFICATION u/s 154 REPOSITORY"""
-    
+
     case_id: str
     pan: str
     original_assessment_order_date: str
-    
+
     error_type: str  # Computational, Clerical, Non-debatable, Patent, CPC Processing
     error_description: str
     computation_mismatch: Optional[float] = None
     mistake_apparent_from_record: bool = True
-    
+
     rectification_application: Dict = field(default_factory=dict)
     disposal_order: Optional[Dict] = None
     revised_computation: Optional[Dict] = None
-    
+
     def prepare_rectification_application(self, error_analysis: str,
                                          correction_proposed: Dict) -> str:
         """Prepare professional rectification application"""
-        
+
         application_draft = f"""
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║           RECTIFICATION APPLICATION u/s 154, IT ACT, 1961                ║
@@ -385,22 +385,22 @@ Dear Sir/Madam,
 @dataclass
 class ReplyRepository:
     """4.C REPLY u/s 133(6) REPOSITORY - Information Demand Response"""
-    
+
     case_id: str
     pan: str
     information_demand_date: str
     queries_raised: List[Dict] = field(default_factory=list)
-    
+
     third_party_confirmations: Dict[str, str] = field(default_factory=dict)
     ledger_confirmations: Dict = field(default_factory=dict)
     bank_statements: List[str] = field(default_factory=list)
     transaction_trails: Dict = field(default_factory=dict)
     affidavits_sworn: List[Dict] = field(default_factory=list)
-    
+
     point_wise_reply_matrix: Dict = field(default_factory=dict)
     annexure_indexing: Dict[str, str] = field(default_factory=dict)
     documentary_cross_reference: Dict = field(default_factory=dict)
-    
+
     def create_point_wise_matrix(self) -> Dict:
         """Create point-wise reply matrix matching queries"""
         matrix = {}
@@ -422,12 +422,12 @@ class ReplyRepository:
 @dataclass
 class CITAAppealRepository:
     """5.A CIT(A) APPEAL REPOSITORY - Form 35"""
-    
+
     case_id: str
     pan: str
     assessment_order_date: str
     appeal_filed_date: Optional[str] = None
-    
+
     form_35: Dict = field(default_factory=dict)
     statement_of_facts: str = ""
     grounds_of_appeal: List[Dict] = field(default_factory=list)
@@ -436,10 +436,10 @@ class CITAAppealRepository:
     judicial_citations: List[Dict] = field(default_factory=list)
     additional_evidence_petition_46a: Optional[Dict] = None
     remand_report_reply: Optional[str] = None
-    
+
     def prepare_grounds_of_appeal(self) -> str:
         """Prepare professional grounds of appeal"""
-        
+
         grounds_draft = """
 ╔═════════════════════════════════════════════════════════════════════════╗
 ║                      GROUNDS OF APPEAL - FORM 35                       ║
@@ -484,11 +484,11 @@ heard.
 @dataclass
 class ITATAppealRepository:
     """5.B ITAT APPEAL REPOSITORY - Form 36"""
-    
+
     case_id: str
     pan: str
     cit_a_order_date: str
-    
+
     form_36: Dict = field(default_factory=dict)
     paper_book: Dict[str, str] = field(default_factory=dict)
     synopsis: str = ""
@@ -498,7 +498,7 @@ class ITATAppealRepository:
     cross_objections: List[str] = field(default_factory=list)
     stay_petition: Optional[Dict] = None
     tribunal_orders: Optional[Dict] = None
-    
+
     def structure_paper_book(self) -> Dict:
         """Create structured paper book for ITAT"""
         return {
@@ -519,21 +519,21 @@ class ITATAppealRepository:
 @dataclass
 class PenaltyRepository:
     """6. PENALTY PROCEEDINGS REPOSITORY"""
-    
+
     case_id: str
     pan: str
     penalty_section: PenaltySection
     penalty_proposed: float
-    
+
     mens_rea_defense: str = ""
     bona_fide_explanation: str = ""
     professional_advice_reliance: List[str] = field(default_factory=list)
     disclosure_history: Dict = field(default_factory=dict)
     voluntary_compliance_evidence: List[str] = field(default_factory=list)
-    
+
     def prepare_penalty_defense(self) -> str:
         """Prepare professional penalty defense"""
-        
+
         defense_draft = f"""
 ╔════════════════════════════════════════════════════════════════════════╗
 ║              PENALTY DEFENSE - SECTION {self.penalty_section.name}    ║
@@ -587,9 +587,9 @@ element of intentionality or culpability.
 @dataclass
 class EvidenceRepository:
     """7. EVIDENCE INTELLIGENCE REPOSITORY"""
-    
+
     case_id: str
-    
+
     banking_trails: Dict[str, List[Dict]] = field(default_factory=dict)
     ledger_extracts: Dict[str, str] = field(default_factory=dict)
     gst_correlation: Dict = field(default_factory=dict)
@@ -601,7 +601,7 @@ class EvidenceRepository:
     email_trail: List[Dict] = field(default_factory=list)
     whatsapp_evidence: List[Dict] = field(default_factory=list)
     affidavits: Dict[str, str] = field(default_factory=dict)
-    
+
     def create_evidence_index(self) -> Dict:
         """Create comprehensive evidence index for litigation"""
         return {
@@ -614,9 +614,9 @@ class EvidenceRepository:
             "affidavits": len(self.affidavits),
             "total_evidence_pieces": self._count_total_evidence()
         }
-    
+
     def _count_total_evidence(self) -> int:
-        return (len(self.banking_trails) + len(self.ledger_extracts) + 
+        return (len(self.banking_trails) + len(self.ledger_extracts) +
                 len(self.agreements_contracts) + len(self.third_party_confirmations) +
                 len(self.email_trail) + len(self.whatsapp_evidence) + len(self.affidavits))
 
@@ -628,9 +628,9 @@ class EvidenceRepository:
 @dataclass
 class CaseLawRepository:
     """8. CASE LAW REPOSITORY - Searchable Database"""
-    
+
     case_laws: Dict[str, Dict] = field(default_factory=dict)
-    
+
     def add_case(self, section: str, issue: str, court: str, year: int,
                 case_citation: str, ratio: str, applicability: str) -> Dict:
         """Add case law to repository"""
@@ -646,11 +646,11 @@ class CaseLawRepository:
             "indexed_date": datetime.now().isoformat()
         }
         return {"status": "Case added", "case_id": case_id}
-    
+
     def search_by_section(self, section: str) -> List[Dict]:
         """Search cases by section"""
         return [case for case in self.case_laws.values() if case["section"] == section]
-    
+
     def search_by_issue(self, issue: str) -> List[Dict]:
         """Search cases by issue"""
         return [case for case in self.case_laws.values() if issue.lower() in case["issue"].lower()]
@@ -662,7 +662,7 @@ class CaseLawRepository:
 
 class DraftingTemplate:
     """9. DRAFTING INTELLIGENCE - Professional Reply Structure"""
-    
+
     @staticmethod
     def get_professional_reply_structure() -> str:
         """Get structure for professional reply"""
@@ -737,10 +737,10 @@ GOLDEN RULE OF TAX LITIGATION DRAFTING:
 @dataclass
 class StrategicDashboard:
     """10. STRATEGIC REPOSITORY FEATURES - Smart Tracking"""
-    
+
     pan: str
     open_cases: List[Dict] = field(default_factory=list)
-    
+
     def create_smart_tracker(self) -> Dict:
         """Create comprehensive smart tracking dashboard"""
         return {
@@ -788,14 +788,14 @@ if __name__ == "__main__":
     print("INTEGRATED INCOME TAX LITIGATION & COMPLIANCE INTELLIGENCE REPOSITORY")
     print("A Structured Legal-Financial Defence System")
     print("="*90 + "\n")
-    
+
     print("Core Philosophy:")
     print('"Every tax position should be capable of being defended through:')
     print("1. Contemporaneous documentary evidence")
     print("2. Statutory backing")
     print("3. Judicial support")
     print('4. Transparent transaction audit trail"\n')
-    
+
     print("10 CORE COMPONENTS:")
     print("1. ✓ Core Statutory Repository")
     print("2. ✓ Return & Compliance Repository")
@@ -807,16 +807,16 @@ if __name__ == "__main__":
     print("8. ✓ Case Law Repository")
     print("9. ✓ Drafting Intelligence Structure")
     print("10. ✓ Strategic Repository Features\n")
-    
+
     dashboard = StrategicDashboard(pan="ABCDE1234F")
     smart_features = dashboard.create_smart_tracker()
-    
+
     print("SMART FEATURES AVAILABLE:")
     for feature, details in smart_features.items():
         print(f"\n{feature.upper().replace('_', ' ')}:")
         print(f"  • Function: {details['function']}")
-        print(f"  • Status: {details['status']}")
-    
+        print(f"  • Status: {details.get('status', 'N/A')}")
+
     print("\n" + "="*90)
     print("✓ Integrated Income Tax Litigation & Compliance Repository Ready")
     print("="*90)
