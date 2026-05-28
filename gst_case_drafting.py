@@ -13,10 +13,10 @@ Comprehensive GST case management for:
 Expert drafting as per GST Rules, 2017 and Procedural Guidelines
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
-from dataclasses import dataclass, field
 from enum import Enum
+from typing import Dict, List, Optional
 
 
 class NoticeType(Enum):
@@ -65,10 +65,10 @@ class GSTNoticeASMT10:
     tax_period: str  # Format: MM/YYYY
     discrepancies: List[Dict]  # List of identified discrepancies
     reply_due_date: datetime  # Typically 15 days
-    
+
     def generate_notice_draft(self) -> str:
         """Generate professional ASMT-10 notice draft"""
-        
+
         discrepancy_details = "\n".join([
             f"  {i+1}. {disc['description']}\n"
             f"     Amount: ₹{disc['amount']}\n"
@@ -76,7 +76,7 @@ class GSTNoticeASMT10:
             f"     Reason: {disc['reason']}"
             for i, disc in enumerate(self.discrepancies)
         ])
-        
+
         draft = f"""
 ═══════════════════════════════════════════════════════════════════════════════
                            GOVERNMENT OF INDIA
@@ -177,10 +177,10 @@ the issues raised and supporting documentation.
 ═══════════════════════════════════════════════════════════════════════════════
 """
         return draft
-    
+
     def generate_expert_reply_template(self) -> str:
         """Generate expert-drafted reply template to ASMT-10"""
-        
+
         reply_template = f"""
 ═══════════════════════════════════════════════════════════════════════════════
                     EXPERT REPLY TO ASMT-10 NOTICE
@@ -217,7 +217,7 @@ maintained proper books of accounts in accordance with GST Rules, 2017.
 ───────────────────────────────────────────────────────────────────────────────
 
 """
-        
+
         for i, disc in enumerate(self.discrepancies, 1):
             reply_template += f"""
 DISCREPANCY {i}: {disc['description']}
@@ -241,7 +241,7 @@ DOCUMENTARY EVIDENCE ENCLOSED:
   ☐ [Other Relevant Documents]
 
 """
-        
+
         reply_template += f"""
 
 3. LEGAL POSITION & APPLICABLE LAW
@@ -314,10 +314,10 @@ class GSTNoticeDRC01A:
     total_demand: float
     reply_due_date: datetime  # Typically 7 days
     grounds_of_demand: str
-    
+
     def generate_notice_draft(self) -> str:
         """Generate professional DRC-01A notice"""
-        
+
         draft = f"""
 ═══════════════════════════════════════════════════════════════════════════════
                            GOVERNMENT OF INDIA
@@ -432,15 +432,15 @@ class GSTNoticeDRC01:
     legal_grounds: List[str]
     reply_due_date: datetime  # Typically 30 days
     personal_hearing_date: Optional[datetime] = None
-    
+
     def generate_notice_draft(self) -> str:
         """Generate professional DRC-01 Show Cause Notice"""
-        
+
         grounds_text = "\n".join([
-            f"  {i+1}. {ground}" 
+            f"  {i+1}. {ground}"
             for i, ground in enumerate(self.legal_grounds)
         ])
-        
+
         draft = f"""
 ═══════════════════════════════════════════════════════════════════════════════
                            GOVERNMENT OF INDIA
@@ -611,11 +611,11 @@ Your reply may be submitted through:
 
 class GSTAppealDrafter:
     """Expert GST Appeal Drafting"""
-    
+
     @staticmethod
     def generate_appellate_appeal_template(case_details: Dict) -> str:
         """Generate expert-drafted GST Appeal to Appellate Authority"""
-        
+
         appeal_draft = f"""
 ═══════════════════════════════════════════════════════════════════════════════
                     GOODS & SERVICES TAX APPELLATE AUTHORITY
@@ -796,11 +796,11 @@ Date: {datetime.now().strftime('%d-%m-%Y')}
 
 class GSTCaseDraftingModule:
     """Complete GST Case Management & Drafting System"""
-    
+
     def __init__(self):
         self.cases: Dict[str, Dict] = {}
         self.notices_issued: List[str] = []
-    
+
     def create_case_file(self, gstin: str, case_id: str, case_type: NoticeType) -> Dict:
         """Create new GST case file"""
         case_file = {
@@ -815,12 +815,12 @@ class GSTCaseDraftingModule:
         }
         self.cases[case_id] = case_file
         return case_file
-    
+
     def track_case_status(self, case_id: str) -> Dict:
         """Track case status and timeline"""
         if case_id not in self.cases:
             return {"error": "Case not found"}
-        
+
         case = self.cases[case_id]
         return {
             "case_id": case_id,
@@ -830,7 +830,7 @@ class GSTCaseDraftingModule:
             "created_date": case["created_date"].isoformat(),
             "timeline": case["communications"]
         }
-    
+
     def generate_compliance_checklist(self) -> Dict:
         """Generate compliance checklist for GST cases"""
         return {
@@ -889,7 +889,7 @@ if __name__ == "__main__":
         email="gst@abcenterprises.com",
         legal_counsel="M/s. XYZ Legal Associates"
     )
-    
+
     # Create ASMT-10 notice
     discrepancies = [
         {
@@ -899,7 +899,7 @@ if __name__ == "__main__":
             "reason": "Error in return calculation"
         }
     ]
-    
+
     notice = GSTNoticeASMT10(
         notice_number="ASMT-10/2024/05",
         notice_date=datetime.now(),
@@ -908,7 +908,7 @@ if __name__ == "__main__":
         discrepancies=discrepancies,
         reply_due_date=datetime.now() + timedelta(days=15)
     )
-    
+
     print(notice.generate_notice_draft())
     print("\n" + "="*80 + "\n")
     print(notice.generate_expert_reply_template())

@@ -18,8 +18,8 @@ All ICAI Guidance Notes (GN) referenced:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
 from enum import Enum
+from typing import Dict, List
 
 
 class LeaseClassification(Enum):
@@ -40,14 +40,14 @@ class Lease:
     transfer_of_ownership: bool  # True = Finance Lease
     bargain_purchase_option: bool
     implicit_interest_rate: float = 0.1  # 10% default
-    
+
     def is_finance_lease(self) -> bool:
         """Determine if lease is finance or operating lease"""
         # Finance lease if: transfer of ownership, bargain purchase, or 75%+ asset life
-        return (self.transfer_of_ownership or 
-                self.bargain_purchase_option or 
+        return (self.transfer_of_ownership or
+                self.bargain_purchase_option or
                 self.lease_type == LeaseClassification.FINANCE_LEASE)
-    
+
     def calculate_present_value_of_lease_payments(self) -> float:
         """Calculate PV of minimum lease payments for finance lease recognition"""
         total_pv = 0
@@ -55,7 +55,7 @@ class Lease:
             pv = self.monthly_lease_payment / ((1 + self.implicit_interest_rate) ** (month / 12))
             total_pv += pv
         return total_pv
-    
+
     def calculate_finance_lease_asset(self) -> Dict:
         """Calculate asset capitalization for finance lease"""
         pv = self.calculate_present_value_of_lease_payments()
@@ -83,7 +83,7 @@ class Employee:
 @dataclass
 class LeaveAccrual:
     """GN: Accrual of Leave Encashment and Sick Leave"""
-    
+
     @staticmethod
     def calculate_leave_liability(employee: Employee, period_end_date: datetime) -> Dict:
         """
@@ -93,22 +93,22 @@ class LeaveAccrual:
         - Sick leave (where applicable)
         - Restrictions on leave carry-forward
         """
-        
+
         days_worked = (period_end_date - employee.date_of_joining).days
         months_worked = days_worked / 30
-        
+
         # Calculate accrued leave
         accrued_leave = min(
             employee.annual_leave_entitled * (months_worked / 12),
             employee.leave_balance
         )
-        
+
         # Sick leave - typically not encashable unless policy allows
         encashable_sick_leave = 0  # Depends on company policy
-        
+
         total_leave_days = accrued_leave + encashable_sick_leave
         leave_encashment_liability = total_leave_days * employee.salary_per_day
-        
+
         return {
             "accrued_leave_days": accrued_leave,
             "encashable_sick_leave": encashable_sick_leave,
@@ -129,17 +129,17 @@ class EmployeeShareOption:
     vesting_period_years: int
     shares_granted: int
     vesting_schedule: str = "Graded"  # Graded or Cliff
-    
+
     def calculate_fair_value_at_grant(self) -> float:
         """Calculate fair value of share options at grant date"""
         # Simplified: Fair Value = Market Price - Strike Price
         return max(0, (self.market_price_at_grant - self.strike_price) * self.shares_granted)
-    
+
     def calculate_expense_per_period(self) -> Dict:
         """Calculate expense recognition over vesting period (GN guidance)"""
         total_fair_value = self.calculate_fair_value_at_grant()
         monthly_expense = total_fair_value / (self.vesting_period_years * 12)
-        
+
         return {
             "total_fair_value": total_fair_value,
             "vesting_period_months": self.vesting_period_years * 12,
@@ -161,18 +161,18 @@ class RealEstateTransaction:
     survey_charges: float = 0
     inspection_charges: float = 0
     capitalization_eligible: bool = True  # Part of asset cost
-    
+
     def calculate_total_acquisition_cost(self) -> float:
         """Calculate total cost as per GN - all directly attributable costs capitalized"""
         if self.capitalization_eligible:
-            return (self.consideration_amount + 
-                    self.registration_charges + 
-                    self.brokerage_commission + 
-                    self.legal_fees + 
-                    self.survey_charges + 
+            return (self.consideration_amount +
+                    self.registration_charges +
+                    self.brokerage_commission +
+                    self.legal_fees +
+                    self.survey_charges +
                     self.inspection_charges)
         return self.consideration_amount
-    
+
     def get_accounting_treatment(self) -> Dict:
         """Get accounting treatment as per GN"""
         total_cost = self.calculate_total_acquisition_cost()
@@ -195,17 +195,17 @@ class DerivativeContract:
     hedging_relationship: bool  # True if used for hedging
     underlying_asset: str  # Currency, Commodity, Interest Rate, etc.
     fair_value_at_reporting_date: float = 0
-    
+
     def classify_derivative(self) -> str:
         """Classify as hedging or trading derivative"""
         if self.hedging_relationship:
             return "Hedging Derivative - Eligible for Hedge Accounting"
         return "Trading Derivative - Fair Value through P&L"
-    
+
     def get_accounting_treatment(self) -> Dict:
         """Get accounting treatment as per GN"""
         classification = self.classify_derivative()
-        
+
         return {
             "classification": classification,
             "fair_value_at_reporting": self.fair_value_at_reporting_date,
@@ -227,12 +227,12 @@ class IncomeUncertainty:
     management_assessment_favorable: float = 1.0  # 0-1 probability
     potential_tax_exposure: float = 0
     management_believes_position_sustainable: bool = True
-    
+
     def calculate_tax_contingency(self) -> Dict:
         """Calculate tax contingency as per GN"""
         probability_unfavorable = 1 - self.management_assessment_favorable
         contingent_liability = self.potential_tax_exposure * probability_unfavorable
-        
+
         if contingent_liability > 0:
             return {
                 "treatment": "Provision required" if probability_unfavorable > 0.5 else "Disclosure as contingent liability",
@@ -249,7 +249,7 @@ class IncomeUncertainty:
 
 class GuidanceNotesComplianceChecker:
     """Compliance checker for all ICAI Guidance Notes"""
-    
+
     GUIDANCE_NOTES = {
         "GN1": "Accounting for Leases (Finance & Operating)",
         "GN2": "Accounting for Real Estate Transactions",
@@ -262,12 +262,12 @@ class GuidanceNotesComplianceChecker:
         "GN9": "Merger and Amalgamation",
         "GN10": "Accounting for Scrap and Waste"
     }
-    
+
     @staticmethod
     def get_guidance_notes_reference() -> Dict:
         """Get all ICAI Guidance Notes reference"""
         return GuidanceNotesComplianceChecker.GUIDANCE_NOTES
-    
+
     @staticmethod
     def validate_accounting_treatment(transaction_type: str) -> Dict:
         """Validate accounting treatment against applicable GN"""
@@ -336,7 +336,7 @@ if __name__ == "__main__":
     )
     print("Finance Lease Treatment:")
     print(lease.calculate_finance_lease_asset())
-    
+
     # Example: Leave Encashment per GN
     employee = Employee(
         employee_id="EMP001",
@@ -348,7 +348,7 @@ if __name__ == "__main__":
     leave_accrual = LeaveAccrual.calculate_leave_liability(employee, datetime.now())
     print("\nLeave Encashment Liability:")
     print(leave_accrual)
-    
+
     # Example: Real Estate Transaction per GN
     re_transaction = RealEstateTransaction(
         transaction_id="REPROP001",
@@ -361,7 +361,7 @@ if __name__ == "__main__":
     )
     print("\nReal Estate Transaction:")
     print(re_transaction.get_accounting_treatment())
-    
+
     # All GN Reference
     print("\nAll ICAI Guidance Notes:")
     for gn, description in GuidanceNotesComplianceChecker.get_guidance_notes_reference().items():

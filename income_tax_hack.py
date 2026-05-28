@@ -10,10 +10,9 @@ Per Income Tax Act:
 - ITR (Income Tax Return) generation
 """
 
-from datetime import datetime
-from typing import Dict, List
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Dict, List
 
 
 class DeductionSection(Enum):
@@ -46,7 +45,7 @@ class TaxSlab:
 
 class IncomeTaxRates:
     """Income Tax Rates for FY 2025-26 (India)"""
-    
+
     # Tax Slabs for Individuals (below 60 years)
     TAX_SLABS_INDIVIDUAL = [
         TaxSlab(0, 250000, 0.00),
@@ -54,21 +53,21 @@ class IncomeTaxRates:
         TaxSlab(500000, 1000000, 0.20),
         TaxSlab(1000000, float('inf'), 0.30)
     ]
-    
+
     # Senior Citizens (60-80 years)
     TAX_SLABS_SENIOR = [
         TaxSlab(0, 500000, 0.00),
         TaxSlab(500000, 1000000, 0.20),
         TaxSlab(1000000, float('inf'), 0.30)
     ]
-    
+
     # Super Senior Citizens (80+ years)
     TAX_SLABS_SUPER_SENIOR = [
         TaxSlab(0, 500000, 0.00),
         TaxSlab(500000, 1000000, 0.20),
         TaxSlab(1000000, float('inf'), 0.30)
     ]
-    
+
     # Surcharge rates
     SURCHARGE_INDIVIDUAL = {
         (5000000, 10000000): 0.10,      # 10%
@@ -76,7 +75,7 @@ class IncomeTaxRates:
         (20000000, 50000000): 0.25,     # 25%
         (50000000, float('inf')): 0.37  # 37%
     }
-    
+
     # Health & Education Cess
     CESS_RATE = 0.04  # 4%
 
@@ -87,7 +86,7 @@ class Income:
     source: IncomeSource
     gross_income: float
     deductions_allowed: float = 0  # For business
-    
+
     def get_net_income(self) -> float:
         """Get net income after deductions"""
         if self.source == IncomeSource.BUSINESS:
@@ -102,7 +101,7 @@ class Deduction:
     amount: float
     applicable: bool = True
     section_limit: float = float('inf')
-    
+
     def get_allowed_deduction(self) -> float:
         """Get deduction limited by section cap"""
         if not self.applicable:
@@ -119,7 +118,7 @@ class TaxPayer:
     incomes: List[Income] = field(default_factory=list)
     deductions: List[Deduction] = field(default_factory=list)
     financial_year: str = "2025-26"
-    
+
     def get_applicable_tax_slabs(self) -> List[TaxSlab]:
         """Get applicable tax slabs based on age"""
         if self.age >= 80:
@@ -128,85 +127,85 @@ class TaxPayer:
             return IncomeTaxRates.TAX_SLABS_SENIOR
         else:
             return IncomeTaxRates.TAX_SLABS_INDIVIDUAL
-    
+
     def calculate_total_income(self) -> float:
         """Calculate total income from all sources"""
         return sum(income.get_net_income() for income in self.incomes)
-    
+
     def calculate_total_deductions(self) -> Dict[str, float]:
         """Calculate total deductions"""
         deduction_details = {}
         total_deductions = 0
-        
+
         for deduction in self.deductions:
             allowed = deduction.get_allowed_deduction()
             deduction_details[deduction.section.value] = allowed
             total_deductions += allowed
-        
+
         return {
             "breakdown": deduction_details,
             "total": total_deductions
         }
-    
+
     def calculate_taxable_income(self) -> float:
         """Calculate taxable income (Total Income - Deductions)"""
         total_income = self.calculate_total_income()
         deductions = self.calculate_total_deductions()
         return max(0, total_income - deductions["total"])
-    
+
     def calculate_income_tax(self) -> float:
         """Calculate income tax as per tax slabs"""
         taxable_income = self.calculate_taxable_income()
         slabs = self.get_applicable_tax_slabs()
-        
+
         tax = 0
         for slab in slabs:
             if taxable_income > slab.min_income:
                 taxable_in_slab = min(taxable_income, slab.max_income) - slab.min_income
                 tax += taxable_in_slab * slab.rate
-        
+
         return tax
-    
+
     def calculate_surcharge(self) -> float:
         """Calculate surcharge based on total income"""
         total_income = self.calculate_total_income()
         income_tax = self.calculate_income_tax()
-        
+
         surcharge = 0
         for (min_amt, max_amt), rate in IncomeTaxRates.SURCHARGE_INDIVIDUAL.items():
             if min_amt <= total_income < max_amt:
                 surcharge = income_tax * rate
                 break
-        
+
         return surcharge
-    
+
     def calculate_cess(self) -> float:
         """Calculate Health and Education Cess"""
         income_tax = self.calculate_income_tax()
         surcharge = self.calculate_surcharge()
         return (income_tax + surcharge) * IncomeTaxRates.CESS_RATE
-    
+
     def calculate_total_tax_liability(self) -> Dict:
         """Calculate total tax liability"""
         income_tax = self.calculate_income_tax()
         surcharge = self.calculate_surcharge()
         cess = self.calculate_cess()
         total_tax = income_tax + surcharge + cess
-        
+
         return {
             "income_tax": income_tax,
             "surcharge": surcharge,
             "cess": cess,
             "total_tax_liability": total_tax
         }
-    
+
     def generate_itr_summary(self) -> Dict:
         """Generate ITR (Income Tax Return) Summary"""
         total_income = self.calculate_total_income()
         deductions = self.calculate_total_deductions()
         taxable_income = self.calculate_taxable_income()
         tax_liability = self.calculate_total_tax_liability()
-        
+
         return {
             "pan": self.pan,
             "name": self.name,
@@ -236,11 +235,11 @@ if __name__ == "__main__":
         name="John Doe",
         age=35
     )
-    
+
     # Add incomes
     taxpayer.incomes.append(Income(IncomeSource.SALARY, 800000))
     taxpayer.incomes.append(Income(IncomeSource.OTHER_SOURCES, 50000))
-    
+
     # Add deductions
     taxpayer.deductions.append(
         Deduction(DeductionSection.SECTION_80C, 150000, True, 150000)
@@ -251,10 +250,10 @@ if __name__ == "__main__":
     taxpayer.deductions.append(
         Deduction(DeductionSection.STANDARD_DEDUCTION, 50000, True)
     )
-    
+
     # Generate ITR
     itr = taxpayer.generate_itr_summary()
-    
+
     print("Income Tax Return Summary:")
     print(f"PAN: {itr['pan']}")
     print(f"Total Income: ₹{itr['total_income']}")
