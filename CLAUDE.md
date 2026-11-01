@@ -316,17 +316,29 @@ produce the same output.
   return in the books, which cites the *original* invoice's number (several
   returns against one invoice are normal, not duplicates). The same invoice
   under two vouchers is a duplicate warning.
-- `GSTR2BReconciler.reconcile` runs five ordered passes — exact invoice no,
-  normalised, trailing number (date+value guard), taxable value + date, and
+- `GSTR2BReconciler.reconcile` runs six ordered passes — exact invoice no,
+  normalised, trailing number (date+value guard), taxable value + date,
   supplier + value only (for number-less documents and for purchase returns,
   which cite the original invoice, never for an invoice with a number of its
-  own) — assigning candidates **best-first** (date gap, value gap, tax gap,
-  sheet, row; in the value-only pass the value fit comes first, the date means
-  nothing) so nothing depends on file order. `book_priority` lets a caller give
-  some books entries first claim. Invoices and credit notes never pair.
-  Tolerances default to 3 days / ₹100 / ₹10 and raise `ValueError` if negative.
+  own), and last **`GSTIN_MISMATCH`** — assigning candidates **best-first**
+  (date gap, value gap, tax gap, sheet, row; in the value-only pass the value
+  fit comes first, the date means nothing) so nothing depends on file order.
+  `book_priority` lets a caller give some books entries first claim. Invoices
+  and credit notes never pair. Tolerances default to 3 days / ₹100 / ₹10 and
+  raise `ValueError` if negative.
+- **The wrong-GSTIN pass** pairs a bill the books carry under *another* party's
+  GSTIN: only documents still unpaired after every other pass, and only when
+  the trailing number (financial-year stamp ignored), the invoice date and both
+  the taxable value and the total tax agree **exactly** — the tolerances do not
+  apply, because with the supplier ignored nothing else vouches for the
+  document. A missing date or number, or any difference at all, leaves the pair
+  alone. The pair carries `GSTIN_MISMATCH` (so it is `MATCHED_WITH_DIFFERENCE`);
+  the same supplier is never called a mismatch (an earlier pass takes it
+  first). Tested to leave a same-supplier match alone and to pair two suppliers
+  with identical documents one-to-one whatever the file order.
 - Flags: value, tax, head, rate (`RATE_DIFFERENCE`), date, `NO_DOC_REFERENCE`
-  (weak match), ITC not available. A missing date alone is informational.
+  (weak match), `GSTIN_MISMATCH` (booked under a different supplier GSTIN), ITC
+  not available. A missing date alone is informational.
 - `split_reverse_charge` takes reverse-charge rows out of the match and counts
   them in a note rather than dropping them silently.
 - `ReconciliationResult` gives `summary()`, `itc_position()`,
@@ -363,6 +375,12 @@ matches the month, tags every document, and rolls the registers forward.
   `REVERSE_4B1`, `INELIGIBLE`, `CN_REVERSE`, `CN_ALREADY_TAKEN`,
   `CN_NOT_OURS`. Books-only lines: `DEFER_BOOKS`, `RECLAIM_4D1`,
   `CN_TAKEN_BOOKS`, `CN_HOLD`, `NO_ITC`, `NOT_THIS_PERIOD`.
+- **A bill booked under the wrong GSTIN** is treated as the document it is: the
+  2B line is matched to the books entry (so it is `CLAIM`, not a deferral and a
+  reversal), the row and the Differences sheet say which GSTIN the books carry,
+  and an action item asks for the supplier to be corrected in the books. An
+  opening-register entry matched this way reclaims under 4(D)(1) with the same
+  note.
 - `Workpaper.table4()`, `.bridge()` and `.ecrrs()` compute Table 4, the bridge
   from books ITC to ITC claimed (**the difference is nil for any data and any
   tagging** — `tests/test_gstr2b_itc_workflow.py` proves it with randomized

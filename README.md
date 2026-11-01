@@ -369,13 +369,20 @@ Run against a firm's real files - a genuine GSTR-2B download and a seven-month
 Tally GSTR-3B voucher register carrying the firm's own month-by-month tagging -
 the tool, re-performing each month from scratch with opening registers taken from
 those tags (and, for April, the purchase returns still open from March), agreed
-with the firm's treatment of 98.6% of 2,450 GSTR-2B lines, and its net ITC over the
-seven months was within 0.9% of what the firm's tags add up to (no single
-month more than 2.6% out). What is left is
+with the firm's treatment of 98.7% of 2,450 GSTR-2B lines, and its net ITC over the
+seven months was within 0.6% of what the firm's tags add up to (no single
+month more than 1.2% out). What is left is
 judgement (a bill marked ineligible, a credit note rejected as not ours) and
-books errors (a supplier booked under another party's GSTIN, an invoice date
-typed a week off), which the tool leaves unpaired for review rather than
+books errors (an invoice date typed a week off, a purchase return carrying no
+supplier number), which the tool leaves unpaired for review rather than
 guesses at.
+
+**A bill booked under the wrong GSTIN** is paired when the serial number, the
+date and both amounts agree exactly, and flagged `GSTIN_MISMATCH` so the supplier
+can be corrected in the books. On the firm's files that found two bills - the
+two the firm had linked by hand - and nothing else, across the seven months of
+GSTR-2B lines and in the November download. Anything short of an exact
+agreement, such as a date a day out, is left unpaired.
 
 *Not covered:* ISD and import credit, the outward-supply reconciliation, the
 reverse-charge workings, Rule 42/43. Treatments are defaults to review, and the
