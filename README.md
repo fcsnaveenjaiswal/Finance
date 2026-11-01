@@ -38,7 +38,10 @@ Finance/
 ├── gst_hack.py                      # GST Management & Returns
 ├── icai_guidance_notes.py           # All ICAI Guidance Notes (GN1-GN10)
 ├── gst_case_drafting.py             # GST Case Drafting & Legal Templates
-├── gstr2b_reconciliation_hack.py    # GSTR-2B vs Books reconciliation (offline CLI)
+├── gstr2b_reconciliation_hack.py    # GSTR-2B vs Books matching engine + quick text/CSV CLI
+├── gstr2b_itc_workflow_hack.py      # Monthly ITC process: Table 4, bridge, carry-forward
+├── gstr2b_workpaper_hack.py         # Monthly ITC workpaper in Excel (offline CLI)
+├── xlsx_writer_hack.py              # Stdlib-only .xlsx writer used by the workpaper
 └── README.md                        # This file
 ```
 
@@ -252,50 +255,108 @@ print(notice.generate_notice_draft())
 print(notice.generate_expert_reply_template())
 ```
 
-#### 5. Reconcile GSTR-2B against the purchase register (offline)
+#### 5. Monthly GSTR-2B vs Books ITC workpaper (Excel, offline)
 
-This one is a command-line tool, not a library call. Nothing is uploaded
-anywhere: both files are read from disk, matched on this machine and the
-report is written back to disk. The same two files always produce the same
-result, so the output stands up as an audit work-paper.
+`gstr2b_workpaper_hack.py` runs the month the way a GST practice does, and
+writes an Excel workpaper. It is a command-line tool, and nothing is uploaded
+anywhere: the files are read from disk, matched on this machine, and the
+workpaper is written back to disk. The same inputs always give the same file.
 
 ```bash
 # See it work on built-in demo data
-python3 gstr2b_reconciliation_hack.py
+python3 gstr2b_workpaper_hack.py
 
-# Reconcile real files: the GSTR-2B download exactly as the portal gives it,
-# and the purchase register exported from Tally/Busy/Zoho as CSV or .xlsx
-python3 gstr2b_reconciliation_hack.py \
-    --gstr2b GSTR2B_062025.xlsx \
-    --books purchase_register.csv \
-    --outdir reco_june \
-    --report reco_june/report.txt
+# First month: the portal's GSTR-2B download and the purchase register
+python3 gstr2b_workpaper_hack.py \
+    --gstr2b GSTR2B_19AAAAA0000A1Z5_092026.xlsx \
+    --books purchase_register.xlsx \
+    --client "Alpha Traders" --outdir sep26
+
+# Next month: carry the open items forward
+python3 gstr2b_workpaper_hack.py \
+    --gstr2b GSTR2B_19AAAAA0000A1Z5_102026.xlsx \
+    --books purchase_register_oct.xlsx \
+    --opening-dir sep26 --outdir oct26
 ```
 
-Useful options:
+The month and GSTIN are read from the portal's file name
+(`GSTR2B_<GSTIN>_<MMYYYY>.xlsx`); otherwise pass `--period 2026-09`.
+
+**The process it follows.** GSTR-3B Table 4(A)(5) is kept tied to GSTR-2B.
+A GSTR-2B line that is not yet in the books is *reversed* under 4(B)(2),
+tracked bill by bill as "2B pending", and *reclaimed* under 4(D)(1) in the
+month it is booked. A books entry that is not yet in GSTR-2B is *deferred*:
+not claimed, tracked as "books deferred", and claimed when the supplier's
+return puts it into GSTR-2B. Both registers roll forward every month. The
+credit-reversal statement (opening + 4(B)(2) − 4(D)(1) = closing) must agree
+with the pending register, and the ITC in the books must bridge to the ITC
+claimed with a difference of nil.
+
+**What you get in `--outdir`:**
+
+| File | What it is |
+|---|---|
+| `GSTR2B_vs_Books_<Mon-YY>.xlsx` | the workpaper |
+| `carry_forward_books_deferred.csv` | next month's opening: booked, not in 2B |
+| `carry_forward_2b_pending.csv` | next month's opening: in 2B, not booked |
+| `summary.txt` | the headline figures as text |
+
+**The workbook.** `Summary` opens with a checks block (bridge closes,
+credit-reversal statement agrees, every line tagged, tie-outs to the portal and
+Tally), then GSTR-3B Table 4, the books-to-return bridge, the credit-reversal
+statement and the action items. `2B Detail` lists every GSTR-2B document with
+its books match and a **TREATMENT** drop-down (`CLAIM`, `CLAIM_PM_BOOKED`,
+`REVERSE_4B2`, `REVERSE_4B1`, `INELIGIBLE`, `CN_REVERSE`, …): change a tag and
+the Summary, the checks and the supplier-wise sheet recalculate. `Books Only`,
+`Differences`, `Reclaimed 4(D)(1)`, `Carry-forward` (with ageing and the
+section 16(4) time limit), `Party-wise` and `Notes` complete it. Blue on pale
+blue is an input or tag you may change, black is a formula, yellow needs a
+look.
+
+**Starting from your existing trackers.** The opening registers can be your
+own tracker sheets, read in place with `FILE#SHEET`:
+
+```bash
+python3 gstr2b_workpaper_hack.py --gstr2b ... --books ... --period 2026-09 \
+    --opening-books-deferred "workings.xlsx#03_Action ITC Book Def Billwise" \
+    --opening-2b-pending "workings.xlsx#04_Action R2B pending Billwise"
+```
 
 | Option | Default | What it does |
 |---|---|---|
+| `--opening-dir DIR` | — | a previous run's folder (its two carry-forward CSVs) |
+| `--cn-policy books\|2b` | `books` | reverse ITC on a purchase return when booked, or only once the supplier's credit note is in GSTR-2B |
 | `--date-tolerance DAYS` | `3` | invoice-date gap treated as a match |
 | `--value-tolerance RUPEES` | `100` | taxable-value gap treated as a match |
 | `--tax-tolerance RUPEES` | `10` | tax-amount gap treated as a match |
-| `--outdir DIR` | — | writes `gstr2b_vs_books_register.csv` + `gstr2b_vs_books_summary.csv` |
-| `--report FILE` | — | also writes the text report to a file |
-| `--quiet` | off | suppresses the report on screen |
+| `--no-timestamp` | off | leave the run time out so identical inputs give identical bytes |
 
-Every document lands in one of four buckets — `MATCHED`,
-`MATCHED_WITH_DIFFERENCE`, `ONLY_IN_GSTR2B` (supplier reported it, you have
-not booked it) and `ONLY_IN_BOOKS` (you booked it, the supplier has not
-reported it, so the ITC is at risk). Filtering the `status` column of the
-register CSV reproduces any of those tables.
+It copes with what actually breaks a monthly reconciliation: the portal's
+banner rows, `Read me` sheet and B2B/B2BA/credit-note sheets; Tally's
+`Doc No.` (supplier number) vs `Vch No.` (internal number); number-less debit
+notes (purchase returns) matched on supplier and value; invoice numbers
+written differently on each side (`INV/001` vs `INV-1`, leading zeros); an
+invoice split rate-wise or across expense ledgers; `Total` rows; Excel date
+serials; reverse-charge rows (listed, not matched); and double entries.
 
-It copes with the things that actually break a monthly reconciliation:
-invoice numbers written differently on each side (`INV/001` vs `INV-1`), an
-invoice split rate-wise in GSTR-2B and across expense ledgers in the books,
-credit notes, `Total` rows at the foot of an export, the portal's banner rows
-and its `Read me` sheet, Excel date serials, and IGST booked against a
-CGST/SGST invoice. ITC is reported conservatively: a matched document is
-claimable only to the extent the supplier has reported it.
+*Not covered:* ISD and import credit, the outward-supply reconciliation, the
+reverse-charge workings, Rule 42/43. Treatments are defaults to review, and the
+statutory points (sections 16(2)(aa), 16(4), Rule 37A) are summarised, not
+advised on.
+
+##### Quick one-off match (text and CSV)
+
+For a single month with no carry-forward, `gstr2b_reconciliation_hack.py`
+matches the two files and prints a text report:
+
+```bash
+python3 gstr2b_reconciliation_hack.py --gstr2b GSTR2B.xlsx --books register.xlsx \
+    --outdir reco_june --report reco_june/report.txt
+```
+
+Every document lands in `MATCHED`, `MATCHED_WITH_DIFFERENCE`, `ONLY_IN_GSTR2B`
+or `ONLY_IN_BOOKS`; `gstr2b_vs_books_register.csv` carries one row per document
+and filtering its `status` column reproduces any table in the report.
 
 ---
 

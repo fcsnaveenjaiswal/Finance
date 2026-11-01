@@ -25,6 +25,9 @@ jobs:
           python3 gst_hack.py
           python3 payroll_hack.py
           python3 gstr2b_reconciliation_hack.py
+          python3 xlsx_writer_hack.py
+          python3 gstr2b_itc_workflow_hack.py
+          python3 gstr2b_workpaper_hack.py
 
       - name: Install ruff
         run: pip install ruff

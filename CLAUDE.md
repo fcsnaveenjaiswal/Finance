@@ -29,6 +29,13 @@ domain. They fall into three groups.
 - **GSTR-2B Reconciliation** (`gstr2b_reconciliation_hack.py`) — offline,
   deterministic matching of GSTR-2B against the purchase register, with its
   own CSV/`.xlsx` readers, a text work-paper and a CSV audit register.
+- **ITC Workflow** (`gstr2b_itc_workflow_hack.py`) — the monthly process on
+  top of the matcher: treatments, GSTR-3B Table 4, the books-to-return bridge,
+  the credit-reversal statement and the carry-forward registers. Pure logic.
+- **ITC Workpaper** (`gstr2b_workpaper_hack.py`) — the Excel workpaper and its
+  command-line tool.
+- **XLSX Writer** (`xlsx_writer_hack.py`) — a standard-library `.xlsx` writer
+  (styles, live formulas with cached values, validation, conditional colours).
 
 **Compliance / litigation modules** (larger, demo-only, document-heavy):
 
@@ -42,9 +49,10 @@ domain. They fall into three groups.
   — a structured tax-defence/case-management system (scrutiny, appeals,
   penalty, evidence, case law, drafting).
 
-There is no framework, no web/CLI entry point, and no persistence layer
-(all state is in-memory). The compliance/litigation modules generate large
-formatted text documents via multi-line string templates.
+There is no framework and no web entry point. Only the two reconciliation
+CLIs write files; everything else keeps its state in memory. The
+compliance/litigation modules generate large formatted text documents via
+multi-line string templates.
 
 ## Repository layout
 
@@ -58,12 +66,18 @@ formatted text documents via multi-line string templates.
 ├── gst_financial_governance.py         # 15-component GST governance framework
 ├── gst_case_drafting.py                # GST legal notice/appeal templates
 ├── income_tax_litigation_repository.py # Tax-defence case management
-├── gstr2b_reconciliation_hack.py       # GSTR-2B vs books reconciliation (CLI)
+├── gstr2b_reconciliation_hack.py       # GSTR-2B vs books matching engine + quick CLI
+├── gstr2b_itc_workflow_hack.py         # Monthly ITC process (engine, no spreadsheet code)
+├── gstr2b_workpaper_hack.py            # Monthly ITC workpaper in Excel + CLI
+├── xlsx_writer_hack.py                 # Stdlib-only .xlsx writer
 ├── tests/
 │   ├── test_accounts.py
 │   ├── test_gst.py
 │   ├── test_payroll.py
-│   └── test_gstr2b_reconciliation.py
+│   ├── test_gstr2b_reconciliation.py
+│   ├── test_gstr2b_itc_workflow.py
+│   ├── test_gstr2b_workpaper.py
+│   └── test_xlsx_writer.py
 ├── pyproject.toml                      # project metadata + ruff config
 ├── README.md
 ├── .github/workflows/
@@ -75,7 +89,7 @@ formatted text documents via multi-line string templates.
 Flat tree by design — no package, no `__init__.py` (in modules or in
 `tests/`). Each domain module is importable on its own. Tests import the
 modules directly because they are run from the repo root. The four core
-modules and `gstr2b_reconciliation_hack.py` have unit tests; the
+modules and the four reconciliation-tooling modules have unit tests; the
 compliance/litigation modules are covered only by their demo blocks.
 
 ## Running the code
@@ -89,17 +103,25 @@ python3 gst_hack.py        # "Invoice Total: ₹7080.0" and "GST Payable: ₹0"
 python3 payroll_hack.py    # "EMP001 Net Pay: ₹71300.0" and a monthly total
 ```
 
-`gstr2b_reconciliation_hack.py` is the one module with a command-line
-interface. With no arguments it runs its demo (a smoke check in `ci.yml`);
-with arguments it reconciles two real files and never touches the network:
+`gstr2b_reconciliation_hack.py` and `gstr2b_workpaper_hack.py` have a
+command-line interface. With no arguments each runs its demo (smoke checks in
+`ci.yml`); with arguments they reconcile real files and never touch the
+network:
 
 ```bash
 python3 gstr2b_reconciliation_hack.py                      # demo
 python3 gstr2b_reconciliation_hack.py \
-    --gstr2b GSTR2B_062025.xlsx \
-    --books purchase_register.csv \
-    --outdir reco_june                                     # real run
+    --gstr2b GSTR2B_062025.xlsx --books purchase_register.csv \
+    --outdir reco_june                                     # one-off text/CSV match
+
+python3 gstr2b_workpaper_hack.py                           # demo (writes to the temp dir)
+python3 gstr2b_workpaper_hack.py \
+    --gstr2b GSTR2B_19AAAAA0000A1Z5_092026.xlsx \
+    --books purchase_register.xlsx --client "Alpha" \
+    --opening-dir aug26 --outdir sep26                     # monthly Excel workpaper
 ```
+
+`xlsx_writer_hack.py` and `gstr2b_itc_workflow_hack.py` also have demo blocks.
 
 The compliance/litigation modules (`gst_financial_governance.py`,
 `gst_case_drafting.py`, `icai_guidance_notes.py`,
@@ -120,8 +142,8 @@ ruff check .
 ```
 
 Two CI workflows run on every push and PR:
-- `.github/workflows/ci.yml` — unit tests, the three core demo scripts,
-  and `ruff check .`
+- `.github/workflows/ci.yml` — unit tests, the core and reconciliation demo
+  scripts, and `ruff check .`
 - `.github/workflows/python-app.yml` — `flake8` (syntax/undefined-name
   gate) and `pytest`
 
@@ -242,42 +264,116 @@ legal-draft text via templates.
 
 ### `gstr2b_reconciliation_hack.py`
 
-Offline reconciliation of GSTR-2B against the purchase register. Standard
+The matching engine, the file readers and a quick text/CSV CLI. Standard
 library only — no upload, no network call, and the same two inputs always
-produce the same output, which is what makes the result an audit work-paper.
+produce the same output.
 
 - Readers: `read_csv_rows` (delimiter + encoding sniffing) and
-  `read_xlsx_sheets` (a small `zipfile` + `ElementTree` reader, so formatted
-  date cells arrive as Excel serials and `parse_date` converts them back).
-  `read_sheets` dispatches on the extension; `.xls` is rejected with a message.
-- `map_columns` / `detect_header_row` handle the portal's banner rows and the
-  differing column names of Tally/Busy/Zoho exports via alias matching.
-  `load_records` reads **every** sheet carrying the required columns, so the
-  portal download works as-is (`Read me` skipped, B2B + CDNR picked up).
-- `InvoiceRecord` (dataclass) normalises its own keys: `gstin_key`,
-  `invoice_key` (`INV/001` == `INV-1`), `trailing_number`. Credit notes are
-  signed negative in `__post_init__` whichever way the export wrote them.
-  Rows with neither a GSTIN-shaped supplier nor an invoice number are dropped
-  by `record_from_row` — that is how an export's `Total` row is excluded.
-- `aggregate_records` sums multi-line documents (GSTR-2B splits an invoice
-  rate-wise; a purchase register splits it across expense ledgers) so the two
-  sides compare document to document.
-- `GSTR2BReconciler.reconcile` runs four ordered one-to-one passes (exact
-  invoice no → normalised → trailing number → taxable value + date; the last
-  two guarded by the date and value tolerances) and ranks candidates by
-  (date gap, value gap, tax gap, sheet, row) so nothing depends on input
-  order. Tolerances default to 3 days / ₹100 / ₹10 and raise `ValueError` if
-  negative.
+  `read_xlsx_sheets` (a small `zipfile` + `ElementTree` reader; formatted date
+  cells arrive as Excel serials and `parse_date` converts them back). Rows are
+  padded so list position + 1 is the true Excel row number. Every part is read
+  through `_safe_xml`, which refuses a DTD/entity declaration, non-UTF-8 parts
+  and parts over `MAX_XLSX_PART_BYTES` (a workbook can arrive by e-mail; no
+  `defusedxml`, because the tool is standard-library only). `.xls` is rejected
+  with a message. `read_sheets("file.xlsx#Sheet name")` selects one sheet.
+- `map_columns` / `detect_header_row` map headers by alias, **best alias wins
+  whatever the column order**: `Doc No.` / `Supplier Invoice No` beat `Vch No.`,
+  `Doc date` beats the voucher `Date` (which becomes `booking_date`), and
+  `Original ...` columns of B2BA/CDNRA sheets are ignored so the revised
+  document is read. `load_records(path, source, side="portal"|"books")` reads
+  every sheet carrying the required columns; on the books side a Tally `Debit
+  Note` / purchase return is an ITC-reducing document (`CREDIT_NOTE`).
+- `InvoiceRecord` (dataclass) normalises its own keys (`gstin_key`,
+  `invoice_key` — `INV/001` == `INV-1` and leading zeros go — `trailing_number`,
+  `identity_key`, `sign_class`). Credit notes are signed negative in
+  `__post_init__` whichever way the export wrote them. A row with neither a
+  GSTIN-shaped supplier nor a document number, or one repeating the header
+  text, is not a document (`Total` rows, section breaks).
+- `aggregate_records` sums multi-line documents per sheet (GSTR-2B splits an
+  invoice rate-wise; a register splits it across ledgers). Number-less
+  documents are identified by voucher number, never merged. The same invoice
+  under two vouchers is a duplicate warning.
+- `GSTR2BReconciler.reconcile` runs five ordered passes — exact invoice no,
+  normalised, trailing number (date+value guard), taxable value + date, and
+  supplier + value only (for number-less purchase returns) — assigning
+  candidates **best-first** (date gap, value gap, tax gap, sheet, row) so
+  nothing depends on file order. Invoices and credit notes never pair.
+  Tolerances default to 3 days / ₹100 / ₹10 and raise `ValueError` if negative.
+- Flags: value, tax, head, rate (`RATE_DIFFERENCE`), date, `NO_DOC_REFERENCE`
+  (weak match), ITC not available. A missing date alone is informational.
+- `split_reverse_charge` takes reverse-charge rows out of the match and counts
+  them in a note rather than dropping them silently.
 - `ReconciliationResult` gives `summary()`, `itc_position()`,
-  `action_items()`, `generate_report()` (nine-section text work-paper) and
-  `write_csv_reports()` (an audit register plus a flat summary). ITC is
-  reported on the conservative section 16(2)(aa) basis: a matched document is
-  claimable at the lower of the two figures and the excess in books is
-  reported as at risk.
+  `action_items()`, `generate_report()` and `write_csv_reports()`.
 
-Amounts in the report are written as `Rs.` rather than `₹` so it prints on a
-Windows console without an encoding error; the `₹` symbol is still used in
-the other modules' demos.
+Amounts in text reports are written as `Rs.` rather than `₹` so they print on
+a Windows console without an encoding error.
+
+### `gstr2b_itc_workflow_hack.py`
+
+The monthly process, as a chartered-accountancy practice runs it. Pure logic
+(no spreadsheet code). `build_workpaper(gstr2b, books, period, opening, ...)`
+matches the month, tags every document, and rolls the registers forward.
+
+- **The model.** 4(A)(5) stays tied to GSTR-2B; a 2B line not yet booked is
+  reversed under 4(B)(2) and *pends*, reclaimed under 4(D)(1) when booked; a
+  books entry not in 2B is *deferred*, claimed when it reaches 2B. Both
+  registers carry forward (`OpeningItems`, `write_carry_forward`).
+- **Treatments** are the single source of truth: `Row2B.claim` and
+  `RowBooks.claim` depend only on the tag, which is what the spreadsheet
+  formulas read too. 2B lines: `CLAIM`, `CLAIM_PM_BOOKED`, `REVERSE_4B2`,
+  `REVERSE_4B1`, `INELIGIBLE`, `CN_REVERSE`, `CN_ALREADY_TAKEN`,
+  `CN_NOT_OURS`. Books-only lines: `DEFER_BOOKS`, `RECLAIM_4D1`,
+  `CN_TAKEN_BOOKS`, `CN_HOLD`, `NO_ITC`, `NOT_THIS_PERIOD`.
+- `Workpaper.table4()`, `.bridge()` and `.ecrrs()` compute Table 4, the bridge
+  from books ITC to ITC claimed (**the difference is nil for any data and any
+  tagging** — `tests/test_gstr2b_itc_workflow.py` proves it with randomized
+  worlds and random retagging) and the credit-reversal roll-forward.
+- `Period` / `parse_period` read months from the labels used in practice
+  (`Deffered In MAY-25`, `235 May-26`, `092026`). `itc_time_limit` is the
+  section 16(4) limit (30 November after the financial year); open items carry
+  `OK` / `EXPIRING` / `EXPIRED` against the return's due date.
+- `cn_policy`: `books` reverses a purchase return in the month booked (the
+  default), `2b` only once the supplier's credit note is in GSTR-2B.
+- `reconcile()` returns its own copies of the documents: find them again by
+  `_source_key` (sheet + first row), never by `id()`.
+
+### `gstr2b_workpaper_hack.py`
+
+The Excel workpaper and the command-line tool for the monthly process.
+`build_workbook(work)` assembles the sheets (Summary, 2B Detail, Books Only,
+Differences, Reclaimed 4(D)(1), Carry-forward, Party-wise, Notes);
+`write_workpaper` also writes the two carry-forward CSVs and `summary.txt`.
+
+- Every figure on the Summary is a live formula (`SUMIFS` over the two detail
+  sheets keyed on the TREATMENT column) written with a cached value, so a
+  viewer that does not recalculate still shows numbers and Excel recalculates
+  on opening. Column positions are looked up by key (`SPEC_2B`, `SPEC_BOOKS`,
+  `Layout`), never hard-coded.
+- House style: navy/orange banners, peach headings, blue-on-pale-blue inputs
+  and tags, black formulas, yellow for review. The checks block sits at the top
+  of the Summary and is colour-coded `OK` / `CHECK` / `enter`.
+- The workbook is deterministic: identical inputs give identical bytes (the
+  run time goes in only if the CLI is not given `--no-timestamp`).
+- The CLI reads the month and GSTIN from the portal's file name
+  (`GSTR2B_<GSTIN>_<MMYYYY>.xlsx`) or `--period`. Opening registers come from
+  `--opening-dir`, or `--opening-books-deferred` / `--opening-2b-pending`,
+  which accept `file#Sheet` so existing tracker sheets can be read in place.
+
+### `xlsx_writer_hack.py`
+
+A small writer: `Workbook`, `Sheet`, `Style`, `Dxf`. `Sheet.write` /
+`Sheet.formula(…, cached=…)`, merges, `freeze_panes`, `autofilter`,
+`validation_list`, `conditional_cell` / `conditional_expression`, `link`,
+`print_titles`, `landscape`. Colours and borders are validated when written.
+Output is deterministic (fixed zip timestamps). It writes workbooks only.
+
+**Verifying spreadsheet output.** Unit tests parse the XML with the standard
+library. Beyond that, the workbook was checked with tools that share no code
+with the writer: `openpyxl` loads it, element order matches XlsxWriter's, and
+LibreOffice recalculates every formula from scratch and agrees with the cached
+values — `RecalculationTests` does the last of these when `soffice` is on the
+path (it skips itself otherwise). Do the same after changing any formula.
 
 **Editing the document-template modules:** the legal-draft strings embed
 significant indentation and intentional blank/trailing whitespace that is
@@ -317,6 +413,10 @@ When extending this codebase, mirror these patterns:
   file rather than switching to PEP 585/604 builtins (`dict`, `list`,
   `X | None`) mid-file. Ruff is configured to leave this alone (`UP006`,
   `UP035`, `UP045` ignored).
+- **Client data stays out of the repo.** The workpaper tools write client
+  registers and workbooks into the working folder; `.gitignore` covers their
+  usual names, but never commit real GSTINs, names or amounts — tests use
+  invented data only.
 - **Float money.** The codebase stores amounts as `float`. Be aware of
   precision when adding logic that compares balances (the reconciliation
   check uses a `< 0.01` tolerance). Don't silently switch to `Decimal`
@@ -332,9 +432,10 @@ Don't go looking for these — they aren't here:
   with ruff config and project metadata; no installable runtime deps).
 - No formatter (no `black`); no type checker (`mypy`, `pyright`).
 - No persistence — all state is in-memory (manager `dict`s/`list`s,
-  dataclass instances). Nothing is written to disk.
-- No web server and no API layer. `gstr2b_reconciliation_hack.py` has a CLI;
-  every other module is import-only.
+  dataclass instances). The one exception is the reconciliation CLIs, which
+  write their reports, the workpaper and the carry-forward CSVs.
+- No web server and no API layer. `gstr2b_reconciliation_hack.py` and
+  `gstr2b_workpaper_hack.py` have a CLI; every other module is import-only.
 - No unit tests for the compliance/litigation modules yet — only the four
   core modules have `tests/`.
 
