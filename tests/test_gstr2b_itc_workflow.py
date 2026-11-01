@@ -789,6 +789,32 @@ def purchase_return(row, number, booked, amount, **kwargs):
                  **kwargs)
 
 
+class WrongGstinWorkflowTests(unittest.TestCase):
+    def test_a_bill_booked_under_the_wrong_gstin_is_claimed_and_the_fix_is_asked_for(self):
+        theirs = portal(1, GSTIN_A, "NRK/00731/26-27", date(2026, 9, 16), 41250.40, cgst=3712.54,
+                        sgst=3712.54)
+        ours = books(1, GSTIN_B, "00731/26-27", date(2026, 9, 16), 41250.40, cgst=3712.54,
+                     sgst=3712.54)
+        work = build_workpaper([theirs], [ours], SEP)
+        row = work.rows_2b[0]
+        self.assertEqual((row.treatment, row.book is not None), (CLAIM, True))
+        self.assertTrue(any(GSTIN_B in note and GSTIN_A in note and "correct the supplier" in note
+                            for note in row.notes), row.notes)
+        self.assertTrue(any("booked under a different supplier GSTIN" in item
+                            for item in work.action_items()))
+        self.assertEqual(dict(work.bridge())["difference"], ZERO)
+        self.assertEqual(work.rows_books, [])
+
+    def test_a_pending_bill_booked_under_the_wrong_gstin_is_still_reclaimed(self):
+        pending = portal(1, GSTIN_A, "NRK/77", date(2026, 8, 20), 10000.0, igst=1800.0,
+                         sheet=OPENING_2B_SHEET)
+        ours = books(1, GSTIN_B, "77", date(2026, 8, 20), 10000.0, igst=1800.0)
+        work = build_workpaper([], [ours], SEP, OpeningItems(pending_2b=[pending], supplied=True))
+        row = work.rows_books[0]
+        self.assertEqual(row.treatment, RECLAIM_4D1)
+        self.assertTrue(any("correct the supplier" in note for note in row.notes), row.notes)
+
+
 class CumulativeRegisterTests(unittest.TestCase):
     """The books file is the whole year's register and the opening registers are cut from it."""
 

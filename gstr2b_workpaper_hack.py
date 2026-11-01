@@ -203,10 +203,14 @@ BASIS_LABEL = {
     MatchBasis.INVOICE_TRAILING_NUMBER: "Trailing number",
     MatchBasis.TAXABLE_VALUE_AND_DATE: "Value and date",
     MatchBasis.SUPPLIER_VALUE_ONLY: "Supplier and value only",
+    MatchBasis.GSTIN_MISMATCH: "Number, date and amounts (GSTIN differs)",
 }
 STATUS_LABEL = {ReconStatus.MATCHED: "Matched", ReconStatus.MATCHED_WITH_DIFFERENCE:
                 "Matched - differs"}
 FLAG_ACTION = (
+    ("GSTIN_MISMATCH", "The books carry this bill under a different supplier GSTIN than the "
+                       "portal; matched on number, date and amounts - correct the supplier in "
+                       "the books."),
     ("NO_DOC_REFERENCE", "Matched on supplier and value only - confirm it is the same document."),
     ("RATE_DIFFERENCE", "Same taxable value, different tax: confirm the rate on the supplier's "
                         "invoice, then correct the books or ask the supplier to amend."),
@@ -1267,6 +1271,10 @@ NOTES_METHOD = (
     "number ignoring punctuation and leading zeros, the trailing number with date and value "
     "agreeing, taxable value with date, and - for number-less purchase returns only - supplier "
     "and value. The best candidate wins; nothing is matched twice.",
+    "Last of all, and only for what is still unmatched, a document is paired across suppliers when "
+    "the serial number, the date and both amounts agree exactly: the books then carry the bill "
+    "under another party's GSTIN. It is claimed like any matched bill and listed on the "
+    "Differences sheet - correct the supplier in the books.",
     "A document is 'booked this month' (CM) when its voucher date falls in the return month; "
     "earlier is PM, later is FUTURE. Without a voucher-date column every row is treated as "
     "booked this month.",

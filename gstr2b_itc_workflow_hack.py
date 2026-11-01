@@ -36,6 +36,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from gstr2b_reconciliation_hack import (
+    FLAG_GSTIN_MISMATCH,
     SOURCE_BOOKS,
     SOURCE_GSTR2B,
     DocumentType,
@@ -753,6 +754,13 @@ class Workpaper:
                 f"{len(late)} document(s) were booked in an earlier month but are not in the "
                 f"opening deferred register - confirm they were not already claimed."
             )
+        wrong = [r for r in self.rows_2b
+                 if r.pair is not None and FLAG_GSTIN_MISMATCH in r.pair.flags]
+        if wrong:
+            items.append(
+                f"{len(wrong)} document(s) are booked under a different supplier GSTIN than "
+                f"GSTR-2B has them - correct the supplier in the books."
+            )
         notes = self.credit_notes_not_in_books()
         if notes:
             items.append(
@@ -916,6 +924,10 @@ def build_workpaper(
         treatment, notes = _treatment_2b(doc, book, cls)
         if pair is not None and pair.flags:
             notes.append("Match flags: " + pair.flag_text)
+        if pair is not None and FLAG_GSTIN_MISMATCH in pair.flags:
+            notes.append(f"The books carry this under GSTIN {book.gstin_key}, GSTR-2B under "
+                         f"{doc.gstin_key}: matched on number, date and amounts - correct the "
+                         f"supplier in the books.")
         work.rows_2b.append(Row2B(_ref_2b(doc, first_sheet, period), doc, pair, book, cls,
                                   treatment, notes))
     work.rows_2b.sort(key=lambda r: (sheets.get(r.doc.sheet, 0), r.doc.serial or r.doc.row_id,
@@ -1038,6 +1050,9 @@ def _treatment_books(
         return CN_HOLD, notes
     if pending is not None:
         notes.append("Matches a document pending from an earlier GSTR-2B: reclaim under 4(D)(1).")
+        if pending.gstin_key != book.gstin_key:
+            notes.append(f"Booked under GSTIN {book.gstin_key}, GSTR-2B has it under "
+                         f"{pending.gstin_key}: correct the supplier in the books.")
         return RECLAIM_4D1, notes
     if cls == CLASS_PM:
         notes.append("Booked in an earlier month and still not in GSTR-2B; not in the opening "

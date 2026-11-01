@@ -20,12 +20,15 @@ summed before matching - GSTR-2B splits an invoice rate-wise and a purchase
 register splits it across expense ledgers, so the two sides are only
 comparable document by document.
 
-Matching runs per supplier GSTIN in four ordered passes, strongest first:
+Matching runs per supplier GSTIN in ordered passes, strongest first:
 
     1. exact invoice number
     2. normalised invoice number        INV/001 == INV-1 == inv 001
     3. trailing number of the invoice   guarded by date + value tolerance
     4. taxable value + invoice date     invoice number unusable
+    5. supplier + value only            purchase returns, which cite another document
+    6. wrong GSTIN                      last, across suppliers: the serial, the date and
+                                        both amounts must agree exactly; flagged
 
 Every pass is one-to-one: a document already matched is never reused, and
 candidates are ranked by (date gap, value gap, tax gap, source row) so the
@@ -80,6 +83,7 @@ FLAG_ITC_NOT_AVAILABLE = "ITC_NOT_AVAILABLE"
 FLAG_MISSING_DATE = "MISSING_DATE"
 FLAG_RATE_DIFFERENCE = "RATE_DIFFERENCE"
 FLAG_NO_DOC_REFERENCE = "NO_DOC_REFERENCE"
+FLAG_GSTIN_MISMATCH = "GSTIN_MISMATCH"
 
 # Flags that make a matched pair a difference rather than a clean match. A
 # pure invoice-number format difference is informational: the amounts, the
@@ -94,6 +98,7 @@ DIFFERENCE_FLAGS = frozenset({
     FLAG_ITC_NOT_AVAILABLE,
     FLAG_RATE_DIFFERENCE,
     FLAG_NO_DOC_REFERENCE,
+    FLAG_GSTIN_MISMATCH,
 })
 
 _EXCEL_EPOCH = date(1899, 12, 30)
@@ -116,6 +121,7 @@ class MatchBasis(Enum):
     INVOICE_TRAILING_NUMBER = "INVOICE_TRAILING_NUMBER"
     TAXABLE_VALUE_AND_DATE = "TAXABLE_VALUE_AND_DATE"
     SUPPLIER_VALUE_ONLY = "SUPPLIER_VALUE_ONLY"
+    GSTIN_MISMATCH = "GSTIN_MISMATCH"
 
 
 class DocumentType(Enum):
@@ -591,6 +597,7 @@ class GSTR2BReconciler:
         (MatchBasis.INVOICE_TRAILING_NUMBER, True),
         (MatchBasis.TAXABLE_VALUE_AND_DATE, True),
         (MatchBasis.SUPPLIER_VALUE_ONLY, True),
+        (MatchBasis.GSTIN_MISMATCH, True),
     )
 
     def __init__(
@@ -687,6 +694,14 @@ class GSTR2BReconciler:
         """
         if not record.gstin_key:
             return None
+        if basis is MatchBasis.GSTIN_MISMATCH:
+            # Across suppliers, so nothing about the supplier is in the key: the serial, the
+            # date and both amounts, all of which must agree exactly.
+            if not record.trailing_number or record.invoice_date is None:
+                return None
+            return ("", record.sign_class, "|".join((
+                record.trailing_number, record.invoice_date.isoformat(),
+                f"{record.taxable_value + 0.0:.2f}", f"{record.total_tax + 0.0:.2f}")))
         if basis is MatchBasis.EXACT_INVOICE_NO:
             part = record.exact_key
         elif basis is MatchBasis.NORMALISED_INVOICE_NO:
@@ -713,6 +728,10 @@ class GSTR2BReconciler:
 
     def _admissible(self, portal: InvoiceRecord, book: InvoiceRecord, basis: MatchBasis) -> bool:
         """Guard for the weaker passes."""
+        if basis is MatchBasis.GSTIN_MISMATCH:
+            # The key has settled the serial, the date and the amounts; what remains is to
+            # refuse the same supplier, which an earlier pass would have paired already.
+            return portal.gstin_key != book.gstin_key
         if basis is MatchBasis.SUPPLIER_VALUE_ONLY:
             # Only for documents that carry no supplier document number (a Tally
             # debit note) and for purchase returns, which usually cite the original
@@ -806,6 +825,8 @@ class GSTR2BReconciler:
             flags.append(FLAG_MISSING_DATE)
         elif gap > self.date_tolerance_days:
             flags.append(FLAG_INVOICE_DATE_DIFF)
+        if basis is MatchBasis.GSTIN_MISMATCH:
+            flags.append(FLAG_GSTIN_MISMATCH)
         if basis is MatchBasis.TAXABLE_VALUE_AND_DATE:
             flags.append(FLAG_INVOICE_NO_MISMATCH)
         elif basis not in (MatchBasis.EXACT_INVOICE_NO, MatchBasis.SUPPLIER_VALUE_ONLY):
