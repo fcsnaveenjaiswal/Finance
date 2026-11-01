@@ -354,8 +354,9 @@ Run against a firm's real files - a genuine GSTR-2B download and a seven-month
 Tally GSTR-3B voucher register carrying the firm's own month-by-month tagging -
 the tool, re-performing each month from scratch with opening registers taken from
 those tags (and, for April, the purchase returns still open from March), agreed
-with the firm's treatment of 98.6% of 2,450 GSTR-2B lines, and its net ITC for
-the month was within 0.9% of what the firm's tags add up to. What is left is
+with the firm's treatment of 98.6% of 2,450 GSTR-2B lines, and its net ITC over the
+seven months was within 0.9% of what the firm's tags add up to (no single
+month more than 2.6% out). What is left is
 judgement (a bill marked ineligible, a credit note rejected as not ours) and
 books errors (a supplier booked under another party's GSTIN, an invoice date
 typed a week off), which the tool leaves unpaired for review rather than
