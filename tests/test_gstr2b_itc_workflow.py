@@ -574,18 +574,18 @@ class CarryForwardTests(unittest.TestCase):
                 "Date,Particulars,GSTIN/UIN,Vch Type,Vch No.,Doc No.,Doc date,Taxable,"
                 "Integrated Tax,Central Tax,State Tax,GSTR 2B Period,Unique GSTR 2B No,Remarks,"
                 "Def - Books Month (not in 2B),CN in Books Not in 2B But Taken in 3B\n"
-                "23-07-2026,Some Supplier,27AAACN2082N1Z8,Registered Purchase,533/26-27,"
-                "074069601131831,23-07-2026,50,9,0,0,NOT SHOWN IN 2B,,,"
+                "23-07-2026,Some Supplier,27ABCDE1234F1Z5,Registered Purchase,101/26-27,"
+                "012345678901234,23-07-2026,50,9,0,0,NOT SHOWN IN 2B,,,"
                 "Def - Books July-26 (not in 2B),\n"
-                "04-05-2026,Another,24AAAAA0000A1Z5,Debit Note,DN/GST/003/26-27,,,-1177,-58.85,"
+                "04-05-2026,Another,24AAAAA0000A1Z5,Debit Note,DN/001/26-27,,,-1250,-62.5,"
                 "0,0,NOT SHOWN IN 2B,,,,CN Books taken in May 26-3B\n"
             )
         items = load_opening_items(books_deferred=path)
         invoice, debit = items.books_deferred
-        self.assertEqual((invoice.invoice_no, invoice.igst), ("074069601131831", 9))
+        self.assertEqual((invoice.invoice_no, invoice.igst), ("012345678901234", 9))
         self.assertEqual(origin_of(invoice), Period(2026, 7))
         self.assertIs(debit.document_type, DocumentType.CREDIT_NOTE)
-        self.assertEqual((debit.voucher_no, debit.invoice_no), ("DN/GST/003/26-27", ""))
+        self.assertEqual((debit.voucher_no, debit.invoice_no), ("DN/001/26-27", ""))
         self.assertTrue(debit.taken_in_3b)
         self.assertFalse(invoice.taken_in_3b)
 
@@ -661,7 +661,7 @@ def _random_world(rng):
                 book_rows.append(books(row, gstin, number, when, taxable, igst=igst, rcm=True))
     for n in range(rng.randint(0, 5)):        # credit notes and purchase returns
         gstin = rng.choice(suppliers)
-        amount = rng.choice((500.0, 1177.0, 8000.0))
+        amount = rng.choice((500.0, 1250.0, 8000.0))
         tax = round(amount * 0.18, 2)
         row += 1
         kind = rng.random()

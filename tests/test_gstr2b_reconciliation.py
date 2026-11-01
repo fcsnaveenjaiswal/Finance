@@ -745,27 +745,27 @@ class RealLayoutRecordTests(unittest.TestCase):
     def test_tally_debit_note_is_a_number_less_itc_reduction(self):
         row = self.tally_row(**{
             "Date": "04-05-2026", "Particulars": "Supplier", "GSTIN/UIN": GSTIN_A,
-            "Vch Type": "Debit Note", "Vch No.": "DN/GST/003/26-27", "Doc No.": "",
-            "Taxable": "-1177", "Integrated Tax": "-58.85",
+            "Vch Type": "Debit Note", "Vch No.": "DN/001/26-27", "Doc No.": "",
+            "Taxable": "-1250", "Integrated Tax": "-62.5",
         })
         record = self.record(row)
         self.assertIs(record.document_type, DocumentType.CREDIT_NOTE)
         self.assertEqual(record.invoice_no, "")
-        self.assertEqual(record.voucher_no, "DN/GST/003/26-27")
-        self.assertEqual(record.taxable_value, -1177)
-        self.assertEqual(record.igst, -58.85)
+        self.assertEqual(record.voucher_no, "DN/001/26-27")
+        self.assertEqual(record.taxable_value, -1250)
+        self.assertEqual(record.igst, -62.5)
         self.assertEqual(record.booking_date, date(2026, 5, 4))
         self.assertIsNone(record.invoice_date)
 
     def test_tally_purchase_keeps_both_dates(self):
         row = self.tally_row(**{
             "Date": "23-07-2026", "GSTIN/UIN": GSTIN_A, "Vch Type": "Registered Purchase",
-            "Vch No.": "533/26-27", "Doc No.": "074069601131831", "Doc date": "20-07-2026",
+            "Vch No.": "101/26-27", "Doc No.": "012345678901234", "Doc date": "20-07-2026",
             "Taxable": "50", "Integrated Tax": "9",
         })
         record = self.record(row)
         self.assertIs(record.document_type, DocumentType.INVOICE)
-        self.assertEqual(record.invoice_no, "074069601131831")
+        self.assertEqual(record.invoice_no, "012345678901234")
         self.assertEqual(record.booking_date, date(2026, 7, 23))
         self.assertEqual(record.invoice_date, date(2026, 7, 20))
 
@@ -803,7 +803,7 @@ class RealLayoutRecordTests(unittest.TestCase):
     def test_numeric_document_numbers_are_restored(self):
         self.assertEqual(clean_doc_number("385.0"), "385")
         self.assertEqual(clean_doc_number("7.4069601131831E+13"), "74069601131831")
-        self.assertEqual(clean_doc_number("074069601131831"), "074069601131831")
+        self.assertEqual(clean_doc_number("012345678901234"), "012345678901234")
         self.assertEqual(clean_doc_number(" INV/12 "), "INV/12")
         self.assertEqual(clean_doc_number("12.5"), "12.5")
         self.assertEqual(clean_doc_number(None), "")
@@ -846,11 +846,11 @@ class NumberLessDocumentTests(unittest.TestCase):
         self.assertIn("2 vouchers", warnings[0])
 
     def test_number_less_debit_note_matches_the_suppliers_credit_note_on_value(self):
-        portal = [make_record(SOURCE_GSTR2B, 7, GSTIN_A, "CN-77", day=20, taxable=-1177,
-                              igst=-58.85, document_type=DocumentType.CREDIT_NOTE)]
+        portal = [make_record(SOURCE_GSTR2B, 7, GSTIN_A, "CN-77", day=20, taxable=-1250,
+                              igst=-62.5, document_type=DocumentType.CREDIT_NOTE)]
         book = InvoiceRecord(source=SOURCE_BOOKS, row_id=2, gstin=GSTIN_A, voucher_no="DN/GST/3",
-                             document_type=DocumentType.CREDIT_NOTE, taxable_value=-1177,
-                             igst=-58.85, booking_date=date(2026, 5, 4))
+                             document_type=DocumentType.CREDIT_NOTE, taxable_value=-1250,
+                             igst=-62.5, booking_date=date(2026, 5, 4))
         result = GSTR2BReconciler().reconcile(portal, [book])
         self.assertEqual(len(result.matched), 1)
         pair = result.matched[0]
@@ -859,7 +859,7 @@ class NumberLessDocumentTests(unittest.TestCase):
         self.assertIn(FLAG_NO_DOC_REFERENCE, pair.flags)
 
     def test_value_only_match_needs_the_value_to_agree(self):
-        portal = [make_record(SOURCE_GSTR2B, 7, GSTIN_A, "CN-77", taxable=-1177, igst=-58.85,
+        portal = [make_record(SOURCE_GSTR2B, 7, GSTIN_A, "CN-77", taxable=-1250, igst=-62.5,
                               document_type=DocumentType.CREDIT_NOTE)]
         book = InvoiceRecord(source=SOURCE_BOOKS, row_id=2, gstin=GSTIN_A, voucher_no="DN/1",
                              document_type=DocumentType.CREDIT_NOTE, taxable_value=-5000,
