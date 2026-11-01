@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net blob:; worker-src blob:; connect-src https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>GSTR-2B vs Books</title>
+<style>
+  /* Layout: a workpaper. A navy banner with an orange rule (the colours of the Excel
+     workpaper it produces), numbered steps because the order matters, then the result. */
+  :root {
+    --paper: #f4f6f9; --card: #ffffff; --ink: #1b2432; --muted: #566074; --line: #d3d9e3;
+    --navy: #1f3864; --navy-ink: #ffffff; --accent: #b4500d; --accent-ink: #ffffff;
+    --head: #fbe5d6; --field: #eff9ff;
+    --ok: #17673b; --ok-bg: #e2f3e9; --warn: #7a4e00; --warn-bg: #fff1c9;
+    --bad: #9b1c1c; --bad-bg: #fbe4e4; --focus: #1a5fd0;
+    --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #11151d; --card: #1a202b; --ink: #e6eaf2; --muted: #9ba6ba; --line: #323b4c;
+      --navy: #0d1b36; --navy-ink: #e6eaf2; --accent: #e07a30; --accent-ink: #1a1208;
+      --head: #3a2b21; --field: #15222f;
+      --ok: #73d49c; --ok-bg: #153020; --warn: #f2c65c; --warn-bg: #382f10;
+      --bad: #ff9c9c; --bad-bg: #3a1818; --focus: #7ab0ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--sans);
+  }
+  .top { background: var(--navy); color: var(--navy-ink); border-bottom: 4px solid var(--accent); }
+  .wrap {
+    max-width: 62rem; margin: 0 auto;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .top .wrap { padding-block: 1.1rem 1rem; }
+  h1 { margin: 0; font-size: 1.6rem; letter-spacing: .01em; font-weight: 650; }
+  .tag { margin: .15rem 0 0; opacity: .85; }
+  main.wrap { padding-block: 1.25rem 3rem; display: grid; gap: 1rem; }
+  main.wrap > * { min-width: 0; }
+  .privacy {
+    margin: 0; padding: .7rem .9rem; background: var(--card); border: 1px solid var(--line);
+    border-left: 4px solid var(--navy); border-radius: 4px; color: var(--muted);
+  }
+  .privacy strong { color: var(--ink); }
+  .mono { font-family: var(--mono); font-size: .92em; }
+  .chip {
+    display: inline-block; margin-left: .4rem; padding: .05rem .55rem; border-radius: 999px;
+    font-size: .82rem; font-weight: 600; background: var(--warn-bg); color: var(--warn);
+    white-space: nowrap;
+  }
+  .chip.ok { background: var(--ok-bg); color: var(--ok); }
+  .chip.bad { background: var(--bad-bg); color: var(--bad); }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.1rem 1.1rem; }
+  .step > h2, .result > h2 { margin: 0 0 .15rem; font-size: 1.1rem; display: flex; gap: .6rem; align-items: baseline; }
+  .n {
+    display: inline-grid; place-items: center; width: 1.55rem; height: 1.55rem; border-radius: 50%;
+    background: var(--navy); color: var(--navy-ink); font-size: .85rem; font-weight: 700; flex: none;
+  }
+  .sub { margin: 0 0 .8rem 2.15rem; color: var(--muted); }
+  .grid { display: grid; gap: .8rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
+  .pick {
+    position: relative; border: 1px dashed var(--line); border-radius: 6px; padding: .75rem .8rem; background: var(--field);
+    min-width: 0;
+  }
+  .pick.drag { border-color: var(--accent); }
+  .pick.has { border-style: solid; }
+  .pick-label { display: block; font-weight: 650; }
+  .pick-hint { margin: .1rem 0 .55rem; color: var(--muted); font-size: .88rem; }
+  .sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .choose { display: inline-block; padding: .4rem .85rem; border: 1px solid var(--navy); border-radius: 4px; background: var(--card); cursor: pointer; font-weight: 600; }
+  .sr:focus-visible + .choose { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .pick-file { margin: .45rem 0 0; font-size: .9rem; overflow-wrap: anywhere; }
+  .pick-file.set { color: var(--ok); font-weight: 600; }
+  .sheet { margin-top: .5rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .sheet select { font: inherit; max-width: 100%; }
+  button, select, input[type=text], input[type=number] { font: inherit; color: inherit; }
+  input[type=text], input[type=number], select {
+    padding: .35rem .5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--field);
+    max-width: 100%;
+  }
+  button.primary {
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 4px;
+    padding: .65rem 1.3rem; font-weight: 650; cursor: pointer;
+  }
+  button.primary:disabled { opacity: .45; cursor: not-allowed; }
+  button.second {
+    background: transparent; color: var(--ink); border: 1px solid var(--navy); border-radius: 4px;
+    padding: .5rem .9rem; cursor: pointer;
+  }
+  button.link { background: none; border: 0; padding: 0; color: var(--focus); text-decoration: underline; cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  details.options { margin-top: .8rem; }
+  details.options summary { cursor: pointer; font-weight: 600; }
+  .opts { display: grid; gap: .6rem .9rem; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); margin-top: .7rem; }
+  .opts label { display: grid; gap: .2rem; font-size: .9rem; min-width: 0; }
+  #status { margin: .7rem 0 0; min-height: 1.4em; color: var(--muted); }
+  #status.busy::before {
+    content: ""; display: inline-block; width: .8em; height: .8em; margin-right: .5em; border-radius: 50%;
+    border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #status.busy::before { animation: none; } }
+  .alert { margin-top: .8rem; padding: .75rem .9rem; border-radius: 4px; background: var(--bad-bg); color: var(--bad); }
+  .alert pre { margin: .4rem 0 0; white-space: pre-wrap; font: .85rem var(--mono); }
+  .result { background: var(--card); border: 1px solid var(--line); border-top: 4px solid var(--navy); border-radius: 6px; padding: 1rem 1.1rem 1.2rem; }
+  .result h3 { margin: 1.3rem 0 .4rem; font-size: .95rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .who { margin: 0 0 .2rem; color: var(--muted); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 38rem; table-layout: fixed; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { width: 34%; }
+  th, td { padding: .3rem .6rem; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { background: var(--head); color: var(--ink); font-weight: 650; border-bottom: 2px solid var(--accent); }
+  tr.strong td { font-weight: 700; }
+  .checks { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+  .actions { margin: 0; padding-left: 1.3rem; display: grid; gap: .35rem; }
+  .facts { display: flex; flex-wrap: wrap; gap: .4rem 1.4rem; margin: 0; padding: 0; list-style: none; }
+  .facts b { font-variant-numeric: tabular-nums; }
+  .downloads { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .6rem; align-items: center; }
+  .note { color: var(--muted); font-size: .9rem; margin: .6rem 0 0; }
+  details.notes pre { white-space: pre-wrap; font: .85rem/1.45 var(--mono); background: var(--paper); padding: .7rem; border-radius: 4px; overflow-x: auto; }
+  footer { color: var(--muted); font-size: .85rem; }
+  noscript p { padding: 1rem; background: var(--bad-bg); color: var(--bad); }
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <h1>GSTR-2B vs Books</h1>
+  <p class="tag">Monthly ITC workpaper. Choose two files, get the Excel workpaper.</p>
+</div></header>
+
+<main class="wrap">
+  <noscript><p>This page needs JavaScript. Please open it in Chrome, Edge or Firefox.</p></noscript>
+
+  <p class="privacy"><strong>Your files stay on this computer.</strong>
+    The page does its work inside this browser tab. The only thing it downloads is the Python
+    engine from <span class="mono">cdn.jsdelivr.net</span>, and the browser is told it may contact
+    no other address, so nothing you choose can be sent anywhere.
+    <span id="engine" class="chip" role="status">Loading the engine&hellip;</span></p>
+
+  <section class="step" aria-labelledby="h1">
+    <h2 id="h1"><span class="n">1</span> This month's files</h2>
+    <p class="sub">The month, the GSTIN and the client's name are read from the GSTR-2B file.</p>
+    <div class="grid" id="pickers-main"></div>
+    <p class="note"><button type="button" class="link" id="example">Try it with example data</button>
+      (an invented month, nothing of yours is used).</p>
+  </section>
+
+  <section class="step" aria-labelledby="h2">
+    <h2 id="h2"><span class="n">2</span> Last month's open items</h2>
+    <p class="sub">Skip this for the first month. Choose the two CSV files this app gave you last
+      month, or your own tracker workbooks; only the rows still open are brought forward.</p>
+    <div class="grid" id="pickers-open"></div>
+  </section>
+
+  <section class="step" aria-labelledby="h3">
+    <h2 id="h3"><span class="n">3</span> Build</h2>
+    <details class="options">
+      <summary>Options</summary>
+      <div class="opts">
+        <label for="o-period">Month <input id="o-period" type="text" placeholder="read from the file, e.g. 2025-11" autocomplete="off"></label>
+        <label for="o-client">Client name <input id="o-client" type="text" placeholder="read from the file" autocomplete="off"></label>
+        <label for="o-gstin">GSTIN <input id="o-gstin" type="text" placeholder="read from the file" autocomplete="off"></label>
+        <label for="o-cn">Purchase returns
+          <select id="o-cn">
+            <option value="books">Reverse the ITC when I book the return</option>
+            <option value="2b">Reverse only when the supplier's credit note is in GSTR-2B</option>
+          </select></label>
+        <label for="o-days">Date tolerance (days) <input id="o-days" type="number" min="0" value="3"></label>
+        <label for="o-value">Taxable value tolerance (Rs) <input id="o-value" type="number" min="0" value="100"></label>
+        <label for="o-tax">Tax tolerance (Rs) <input id="o-tax" type="number" min="0" value="10"></label>
+      </div>
+    </details>
+    <p style="margin:.9rem 0 0"><button type="button" class="primary" id="build" disabled>Build the workpaper</button></p>
+    <p id="status" role="status" aria-live="polite"></p>
+    <div id="error" class="alert" hidden></div>
+  </section>
+
+  <section class="result" id="result" hidden aria-labelledby="h4"></section>
+
+  <footer>Runs the same engine as the command-line tool in the Finance repository. The treatments are
+    defaults to review; the statutory points are summarised, not advised on.</footer>
+</main>
+
+<script id="app-data" type="application/json">__APP_DATA__</script>
+<script id="worker-src" type="text/plain">
+/* The Python engine runs here, off the page's thread, so the page stays responsive. */
+let pyodide = null;
+const post = (message, transfer) => self.postMessage(message, transfer || []);
+self.onmessage = async (event) => {
+  const msg = event.data;
+  try {
+    if (msg.type === 'init') {
+      post({type: 'status', text: 'Loading the Python engine'});
+      importScripts(msg.base + 'pyodide.js');
+      pyodide = await loadPyodide({indexURL: msg.base});
+      post({type: 'status', text: 'Starting the workpaper program'});
+      pyodide.FS.mkdirTree('/app');
+      pyodide.FS.mkdirTree('/work/in');
+      for (const name of Object.keys(msg.sources)) pyodide.FS.writeFile('/app/' + name, msg.sources[name]);
+      pyodide.runPython("import sys, json\nsys.path.insert(0, '/app')\nimport gstr2b_app_hack as app");
+      post({type: 'ready'});
+    } else if (msg.type === 'put') {
+      const dir = '/work/in/' + msg.role;
+      pyodide.FS.mkdirTree(dir);
+      for (const old of pyodide.FS.readdir(dir)) { if (old !== '.' && old !== '..') pyodide.FS.unlink(dir + '/' + old); }
+      const path = dir + '/' + msg.name;
+      pyodide.FS.writeFile(path, new Uint8Array(msg.bytes));
+      pyodide.globals.set('chosen_path', path);
+      const sheets = JSON.parse(pyodide.runPython('json.dumps(app.list_sheets(chosen_path))'));
+      post({type: 'put-done', role: msg.role, path: path, sheets: sheets});
+    } else if (msg.type === 'run') {
+      pyodide.globals.set('options_json', JSON.stringify(msg.options));
+      pyodide.globals.set('progress', (text) => post({type: 'progress', text: String(text)}));
+      const result = JSON.parse(pyodide.runPython('json.dumps(app.run_job(json.loads(options_json), progress))'));
+      const files = [];
+      const transfer = [];
+      if (result.ok) {
+        for (const file of result.files) {
+          const bytes = pyodide.FS.readFile(file.path).slice();
+          files.push({name: file.name, bytes: bytes});
+          transfer.push(bytes.buffer);
+        }
+      }
+      post({type: 'result', result: result, files: files}, transfer);
+    }
+  } catch (error) {
+    post({type: 'fatal', during: msg.type, message: String((error && error.message) || error)});
+  }
+};
+</script>
+<script>
+(function () {
+  'use strict';
+  var APP = JSON.parse(document.getElementById('app-data').textContent);
+  var ROLES = [
+    {key: 'gstr2b', where: 'pickers-main', label: 'GSTR-2B download', sheets: false,
+     hint: 'The Excel file from the GST portal (GSTR-2B, Download).'},
+    {key: 'books', where: 'pickers-main', label: 'Purchase register', sheets: true,
+     hint: 'Your Tally purchase or GSTR-3B voucher register, as Excel or CSV. A register for the whole year is fine.'},
+    {key: 'opening_books', where: 'pickers-open', label: 'Books deferred (still open)', sheets: true,
+     hint: 'carry_forward_books_deferred.csv from last month, or your tracker workbook.'},
+    {key: 'opening_2b', where: 'pickers-open', label: 'GSTR-2B pending (still open)', sheets: true,
+     hint: 'carry_forward_2b_pending.csv from last month, or your tracker workbook.'}
+  ];
+  var MIME = {xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              csv: 'text/csv', txt: 'text/plain', zip: 'application/zip'};
+  var state = {ready: false, busy: false, files: {}, waiting: {}};
+  var el = function (id) { return document.getElementById(id); };
+
+  /* Everything shown that came from a file goes in as text, never as HTML. */
+  function h(tag, attrs) {
+    var node = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === 'text') node.textContent = attrs[k];
+      else if (k === 'class') node.className = attrs[k];
+      else node.setAttribute(k, attrs[k]);
+    });
+    (function add(list) {
+      for (var i = 0; i < list.length; i++) {
+        var child = list[i];
+        if (child === null || child === undefined || child === false) continue;
+        if (Array.isArray(child)) add(child);
+        else node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+      }
+    })(Array.prototype.slice.call(arguments, 2));
+    return node;
+  }
+  function money(value) {
+    return value === 0 ? '–' : value.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  }
+  function size(bytes) { return bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB' : (bytes / 1048576).toFixed(1) + ' MB'; }
+  function setStatus(text, busy) { var s = el('status'); s.textContent = text || ''; s.className = busy ? 'busy' : ''; }
+  function setEngine(text, cls) { var c = el('engine'); c.textContent = text; c.className = 'chip' + (cls ? ' ' + cls : ''); }
+  function showError(message, detail) {
+    var box = el('error'); box.textContent = '';
+    box.appendChild(h('strong', {text: message}));
+    if (detail) box.appendChild(h('pre', {text: detail}));
+    box.hidden = false;
+  }
+  function refresh() {
+    el('build').disabled = !(state.ready && !state.busy && state.files.gstr2b && state.files.books);
+  }
+
+  /* ---- the engine, in a worker ---- */
+  if (typeof Worker === 'undefined' || typeof WebAssembly === 'undefined') {
+    setEngine('This browser cannot run the engine. Please use Chrome, Edge or Firefox.', 'bad');
+    return;
+  }
+  var worker = new Worker(URL.createObjectURL(new Blob([el('worker-src').textContent], {type: 'text/javascript'})));
+  worker.onerror = function (e) { setEngine('The engine stopped', 'bad'); showError('The engine stopped unexpectedly.', e.message || ''); };
+  worker.onmessage = function (event) {
+    var msg = event.data;
+    if (msg.type === 'status') setEngine(msg.text + '…');
+    else if (msg.type === 'ready') { state.ready = true; setEngine('Engine ready', 'ok'); refresh(); }
+    else if (msg.type === 'put-done') {
+      var done = state.waiting[msg.role]; delete state.waiting[msg.role];
+      if (done) done(msg);
+    } else if (msg.type === 'progress') setStatus(msg.text + '…', true);
+    else if (msg.type === 'result') finish(msg);
+    else if (msg.type === 'fatal') {
+      state.busy = false; setStatus('');
+      if (!state.ready) {
+        setEngine('The engine could not start', 'bad');
+        showError('The engine could not be loaded.', 'The first load needs an internet connection to fetch the Python engine from cdn.jsdelivr.net. Check the connection and reload this page.\n\n' + msg.message);
+      } else showError('Something went wrong.', msg.message);
+      refresh();
+    }
+  };
+  worker.postMessage({type: 'init', base: APP.pyodide, sources: APP.sources});
+
+  /* ---- choosing files ---- */
+  function put(role, name, buffer) {
+    return new Promise(function (resolve) {
+      state.waiting[role] = resolve;
+      worker.postMessage({type: 'put', role: role, name: name, bytes: buffer}, [buffer]);
+    });
+  }
+  function describe(role, name, bytes, sheets) {
+    var box = el('pick-' + role.key);
+    var line = box.querySelector('.pick-file');
+    line.textContent = name + '  (' + size(bytes) + ')';
+    line.className = 'pick-file set';
+    box.classList.add('has');
+    var sel = box.querySelector('select');
+    if (sel) {
+      sel.textContent = '';
+      sel.appendChild(h('option', {value: '', text: 'All sheets that hold documents'}));
+      sheets.forEach(function (s) { sel.appendChild(h('option', {value: s, text: s})); });
+      box.querySelector('.sheet').hidden = !(role.sheets && sheets.length > 1);
+    }
+  }
+  function choose(role, name, buffer, bytes) {
+    setStatus('Reading ' + name + '…', true);
+    el('error').hidden = true;
+    return put(role.key, name, buffer).then(function (msg) {
+      state.files[role.key] = {name: name, path: msg.path};
+      describe(role, name, bytes, msg.sheets);
+      setStatus('');
+      refresh();
+    });
+  }
+  function build_picker(role) {
+    var input = h('input', {type: 'file', id: 'f-' + role.key, accept: '.xlsx,.csv', class: 'sr'});
+    var box = h('div', {class: 'pick', id: 'pick-' + role.key},
+      h('label', {class: 'pick-label', for: 'f-' + role.key, text: role.label}),
+      h('p', {class: 'pick-hint', text: role.hint}),
+      input,
+      h('label', {class: 'choose', for: 'f-' + role.key, text: 'Choose file'}),
+      h('p', {class: 'pick-file', text: 'No file chosen'}),
+      role.sheets ? h('div', {class: 'sheet', hidden: ''},
+        h('label', {for: 's-' + role.key, text: 'Sheet'}), h('select', {id: 's-' + role.key})) : null);
+    input.addEventListener('change', function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      file.arrayBuffer().then(function (buffer) { return choose(role, file.name, buffer, file.size); });
+    });
+    box.addEventListener('dragover', function (e) { e.preventDefault(); box.classList.add('drag'); });
+    box.addEventListener('dragleave', function () { box.classList.remove('drag'); });
+    box.addEventListener('drop', function (e) {
+      e.preventDefault(); box.classList.remove('drag');
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+        input.files = e.dataTransfer.files; input.dispatchEvent(new Event('change'));
+      }
+    });
+    el(role.where).appendChild(box);
+  }
+  ROLES.forEach(build_picker);
+
+  el('example').addEventListener('click', function () {
+    if (!state.ready) { setStatus('The engine is still loading - try again in a moment.'); return; }
+    var names = Object.keys(APP.example);
+    var map = {gstr2b: names.filter(function (n) { return n.indexOf('GSTR2B_') === 0; })[0],
+               books: 'purchase_register_sep26.csv',
+               opening_books: 'carry_forward_books_deferred.csv',
+               opening_2b: 'carry_forward_2b_pending.csv'};
+    var enc = new TextEncoder();
+    Promise.all(ROLES.map(function (role) {
+      var bytes = enc.encode(APP.example[map[role.key]]);
+      return choose(role, map[role.key], bytes.buffer.slice(0), bytes.length);
+    })).then(function () { setStatus('Example files loaded - press Build.'); });
+  });
+
+  /* ---- building ---- */
+  function spec(role) {
+    var f = state.files[role.key];
+    if (!f) return '';
+    var sel = el('s-' + role.key);
+    return f.path + (sel && sel.value ? '#' + sel.value : '');
+  }
+  el('build').addEventListener('click', function () {
+    if (state.busy) return;
+    state.busy = true; refresh();
+    el('error').hidden = true; el('result').hidden = true;
+    setStatus('Starting…', true);
+    worker.postMessage({type: 'run', options: {
+      gstr2b: spec(ROLES[0]), books: spec(ROLES[1]), opening_books: spec(ROLES[2]), opening_2b: spec(ROLES[3]),
+      period: el('o-period').value, client: el('o-client').value, gstin: el('o-gstin').value,
+      cn_policy: el('o-cn').value, date_tolerance: el('o-days').value,
+      value_tolerance: el('o-value').value, tax_tolerance: el('o-tax').value,
+      outdir: '/work/out'
+    }});
+  });
+
+  function finish(msg) {
+    state.busy = false; refresh(); setStatus('');
+    if (!msg.result.ok) { showError(msg.result.error, msg.result.unexpected ? 'Please keep the files and tell whoever maintains this tool.' : ''); return; }
+    render(msg.result, msg.files);
+  }
+
+  /* ---- the result ---- */
+  function figures(title, rows, strongLabels) {
+    var head = h('tr', null, h('th', {text: title}), ['IGST', 'CGST', 'SGST', 'Cess', 'Total'].map(function (c) { return h('th', {text: c}); }));
+    var body = rows.map(function (r) {
+      return h('tr', {class: strongLabels.indexOf(r.label) >= 0 ? 'strong' : ''},
+        h('td', {text: r.label}), r.values.map(function (v) { return h('td', {text: money(v)}); }), h('td', {text: money(r.total)}));
+    });
+    return h('div', {class: 'scroll'}, h('table', null, h('thead', null, head), h('tbody', null, body)));
+  }
+  function save(name, bytes) {
+    var ext = name.split('.').pop().toLowerCase();
+    var url = URL.createObjectURL(new Blob([bytes], {type: MIME[ext] || 'application/octet-stream'}));
+    var a = h('a', {href: url, download: name}); document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 4000);
+  }
+  function render(result, files) {
+    var s = result.summary, box = el('result'); box.textContent = '';
+    var c = s.counts;
+    box.appendChild(h('h2', {id: 'h4', text: s.period + ' · F.Y. ' + s.fy}));
+    if (s.client || s.gstin) box.appendChild(h('p', {class: 'who', text: (s.client + '  ' + s.gstin).trim()}));
+    box.appendChild(h('h3', {text: 'Checks'}));
+    box.appendChild(h('ul', {class: 'checks'}, s.checks.map(function (k) {
+      return h('li', null, h('span', {class: 'chip ' + (k.ok ? 'ok' : 'bad'), text: k.ok ? 'OK' : 'CHECK'}), ' ' + k.label);
+    })));
+    box.appendChild(h('h3', {text: 'GSTR-3B Table 4'}));
+    box.appendChild(figures('', s.table4, ['4(C) Net ITC']));
+    box.appendChild(h('h3', {text: 'Books to return'}));
+    box.appendChild(figures('', s.bridge, ['Difference']));
+    box.appendChild(h('h3', {text: 'Credit-reversal statement'}));
+    box.appendChild(figures('', s.statement, ['Closing']));
+    box.appendChild(h('h3', {text: 'Documents'}));
+    box.appendChild(h('ul', {class: 'facts'},
+      [[c.gstr2b_documents, 'in GSTR-2B'], [c.matched, 'matched (' + c.differences + ' differ)'], [c.not_in_books, 'not in the books'],
+       [c.books_only, 'only in the books'], [c.closing_books_deferred, 'books deferred, carried forward'], [c.closing_pending_2b, 'GSTR-2B pending, carried forward']]
+        .map(function (p) { return h('li', null, h('b', {text: String(p[0])}), ' ' + p[1]); })));
+    box.appendChild(h('h3', {text: 'What to do next'}));
+    box.appendChild(h('ol', {class: 'actions'}, s.actions.map(function (a) { return h('li', {text: a}); })));
+    box.appendChild(h('h3', {text: 'Save'}));
+    var bar = h('div', {class: 'downloads'});
+    var order = ['xlsx', 'zip', 'csv', 'txt'];
+    files.slice().sort(function (a, b) { return order.indexOf(a.name.split('.').pop()) - order.indexOf(b.name.split('.').pop()); })
+      .forEach(function (f) {
+        var ext = f.name.split('.').pop();
+        var nice = ext === 'xlsx' ? 'Excel workpaper' : ext === 'zip' ? 'Everything (zip)'
+          : f.name.indexOf('books_deferred') >= 0 ? 'Books deferred (CSV)' : f.name.indexOf('2b_pending') >= 0 ? 'GSTR-2B pending (CSV)' : 'Summary (text)';
+        var b = h('button', {type: 'button', class: ext === 'xlsx' ? 'primary' : 'second', text: nice});
+        b.addEventListener('click', function () { save(f.name, f.bytes); });
+        bar.appendChild(b);
+      });
+    box.appendChild(bar);
+    box.appendChild(h('p', {class: 'note', text: 'Keep the two CSV files. Next month, choose them in step 2.'}));
+    if (s.notes.length) {
+      box.appendChild(h('details', {class: 'notes'}, h('summary', {text: 'Notes from reading the files (' + s.notes.length + ')'}), h('pre', {text: s.notes.join('\n\n')})));
+    }
+    box.hidden = false;
+    box.scrollIntoView({behavior: 'smooth', block: 'start'});
+  }
+})();
+</script>
+</body>
+</html>
