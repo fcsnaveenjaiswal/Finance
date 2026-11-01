@@ -38,6 +38,7 @@ Finance/
 ├── gst_hack.py                      # GST Management & Returns
 ├── icai_guidance_notes.py           # All ICAI Guidance Notes (GN1-GN10)
 ├── gst_case_drafting.py             # GST Case Drafting & Legal Templates
+├── gstr2b_reconciliation_hack.py    # GSTR-2B vs Books reconciliation (offline CLI)
 └── README.md                        # This file
 ```
 
@@ -250,6 +251,51 @@ notice = GSTNoticeASMT10(
 print(notice.generate_notice_draft())
 print(notice.generate_expert_reply_template())
 ```
+
+#### 5. Reconcile GSTR-2B against the purchase register (offline)
+
+This one is a command-line tool, not a library call. Nothing is uploaded
+anywhere: both files are read from disk, matched on this machine and the
+report is written back to disk. The same two files always produce the same
+result, so the output stands up as an audit work-paper.
+
+```bash
+# See it work on built-in demo data
+python3 gstr2b_reconciliation_hack.py
+
+# Reconcile real files: the GSTR-2B download exactly as the portal gives it,
+# and the purchase register exported from Tally/Busy/Zoho as CSV or .xlsx
+python3 gstr2b_reconciliation_hack.py \
+    --gstr2b GSTR2B_062025.xlsx \
+    --books purchase_register.csv \
+    --outdir reco_june \
+    --report reco_june/report.txt
+```
+
+Useful options:
+
+| Option | Default | What it does |
+|---|---|---|
+| `--date-tolerance DAYS` | `3` | invoice-date gap treated as a match |
+| `--value-tolerance RUPEES` | `100` | taxable-value gap treated as a match |
+| `--tax-tolerance RUPEES` | `10` | tax-amount gap treated as a match |
+| `--outdir DIR` | — | writes `gstr2b_vs_books_register.csv` + `gstr2b_vs_books_summary.csv` |
+| `--report FILE` | — | also writes the text report to a file |
+| `--quiet` | off | suppresses the report on screen |
+
+Every document lands in one of four buckets — `MATCHED`,
+`MATCHED_WITH_DIFFERENCE`, `ONLY_IN_GSTR2B` (supplier reported it, you have
+not booked it) and `ONLY_IN_BOOKS` (you booked it, the supplier has not
+reported it, so the ITC is at risk). Filtering the `status` column of the
+register CSV reproduces any of those tables.
+
+It copes with the things that actually break a monthly reconciliation:
+invoice numbers written differently on each side (`INV/001` vs `INV-1`), an
+invoice split rate-wise in GSTR-2B and across expense ledgers in the books,
+credit notes, `Total` rows at the foot of an export, the portal's banner rows
+and its `Read me` sheet, Excel date serials, and IGST booked against a
+CGST/SGST invoice. ITC is reported conservatively: a matched document is
+claimable only to the extent the supplier has reported it.
 
 ---
 

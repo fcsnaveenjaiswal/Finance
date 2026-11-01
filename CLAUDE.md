@@ -8,7 +8,7 @@ Guidance for AI assistants working in this repository.
 finance, tax, and litigation-support utilities written in pure Python 3
 (standard library at runtime; `ruff`, `flake8`, and `pytest` are dev
 tools). Each module at the repo root is independent and models one
-domain. They fall into two groups.
+domain. They fall into three groups.
 
 **Core ledger / compute modules** (small, with unit tests):
 
@@ -23,6 +23,12 @@ domain. They fall into two groups.
   / TDS, and monthly aggregates.
 - **Income Tax** (`income_tax_hack.py`) — slab-based individual income tax
   for FY 2025-26: income heads, deductions, surcharge, and cess.
+
+**Reconciliation tooling** (CLI + unit tests):
+
+- **GSTR-2B Reconciliation** (`gstr2b_reconciliation_hack.py`) — offline,
+  deterministic matching of GSTR-2B against the purchase register, with its
+  own CSV/`.xlsx` readers, a text work-paper and a CSV audit register.
 
 **Compliance / litigation modules** (larger, demo-only, document-heavy):
 
@@ -52,10 +58,12 @@ formatted text documents via multi-line string templates.
 ├── gst_financial_governance.py         # 15-component GST governance framework
 ├── gst_case_drafting.py                # GST legal notice/appeal templates
 ├── income_tax_litigation_repository.py # Tax-defence case management
+├── gstr2b_reconciliation_hack.py       # GSTR-2B vs books reconciliation (CLI)
 ├── tests/
 │   ├── test_accounts.py
 │   ├── test_gst.py
-│   └── test_payroll.py
+│   ├── test_payroll.py
+│   └── test_gstr2b_reconciliation.py
 ├── pyproject.toml                      # project metadata + ruff config
 ├── README.md
 ├── .github/workflows/
@@ -66,9 +74,9 @@ formatted text documents via multi-line string templates.
 
 Flat tree by design — no package, no `__init__.py` (in modules or in
 `tests/`). Each domain module is importable on its own. Tests import the
-modules directly because they are run from the repo root. Only the four
-core modules currently have unit tests; the compliance/litigation modules
-are covered only by their demo blocks.
+modules directly because they are run from the repo root. The four core
+modules and `gstr2b_reconciliation_hack.py` have unit tests; the
+compliance/litigation modules are covered only by their demo blocks.
 
 ## Running the code
 
@@ -79,6 +87,18 @@ The core ones print verifiable values:
 python3 accounts_hack.py   # "Bank Balance: 10000.0" and "Accounts balanced: True"
 python3 gst_hack.py        # "Invoice Total: ₹7080.0" and "GST Payable: ₹0"
 python3 payroll_hack.py    # "EMP001 Net Pay: ₹71300.0" and a monthly total
+```
+
+`gstr2b_reconciliation_hack.py` is the one module with a command-line
+interface. With no arguments it runs its demo (a smoke check in `ci.yml`);
+with arguments it reconciles two real files and never touches the network:
+
+```bash
+python3 gstr2b_reconciliation_hack.py                      # demo
+python3 gstr2b_reconciliation_hack.py \
+    --gstr2b GSTR2B_062025.xlsx \
+    --books purchase_register.csv \
+    --outdir reco_june                                     # real run
 ```
 
 The compliance/litigation modules (`gst_financial_governance.py`,
@@ -220,6 +240,45 @@ CIT(A)/ITAT, penalty, evidence, case law) plus `DraftingTemplate` and
 `StrategicDashboard`. Like the GST drafting module, it produces formatted
 legal-draft text via templates.
 
+### `gstr2b_reconciliation_hack.py`
+
+Offline reconciliation of GSTR-2B against the purchase register. Standard
+library only — no upload, no network call, and the same two inputs always
+produce the same output, which is what makes the result an audit work-paper.
+
+- Readers: `read_csv_rows` (delimiter + encoding sniffing) and
+  `read_xlsx_sheets` (a small `zipfile` + `ElementTree` reader, so formatted
+  date cells arrive as Excel serials and `parse_date` converts them back).
+  `read_sheets` dispatches on the extension; `.xls` is rejected with a message.
+- `map_columns` / `detect_header_row` handle the portal's banner rows and the
+  differing column names of Tally/Busy/Zoho exports via alias matching.
+  `load_records` reads **every** sheet carrying the required columns, so the
+  portal download works as-is (`Read me` skipped, B2B + CDNR picked up).
+- `InvoiceRecord` (dataclass) normalises its own keys: `gstin_key`,
+  `invoice_key` (`INV/001` == `INV-1`), `trailing_number`. Credit notes are
+  signed negative in `__post_init__` whichever way the export wrote them.
+  Rows with neither a GSTIN-shaped supplier nor an invoice number are dropped
+  by `record_from_row` — that is how an export's `Total` row is excluded.
+- `aggregate_records` sums multi-line documents (GSTR-2B splits an invoice
+  rate-wise; a purchase register splits it across expense ledgers) so the two
+  sides compare document to document.
+- `GSTR2BReconciler.reconcile` runs four ordered one-to-one passes (exact
+  invoice no → normalised → trailing number → taxable value + date; the last
+  two guarded by the date and value tolerances) and ranks candidates by
+  (date gap, value gap, tax gap, sheet, row) so nothing depends on input
+  order. Tolerances default to 3 days / ₹100 / ₹10 and raise `ValueError` if
+  negative.
+- `ReconciliationResult` gives `summary()`, `itc_position()`,
+  `action_items()`, `generate_report()` (nine-section text work-paper) and
+  `write_csv_reports()` (an audit register plus a flat summary). ITC is
+  reported on the conservative section 16(2)(aa) basis: a matched document is
+  claimable at the lower of the two figures and the excess in books is
+  reported as at risk.
+
+Amounts in the report are written as `Rs.` rather than `₹` so it prints on a
+Windows console without an encoding error; the `₹` symbol is still used in
+the other modules' demos.
+
 **Editing the document-template modules:** the legal-draft strings embed
 significant indentation and intentional blank/trailing whitespace that is
 part of the rendered output. `ruff` is configured to skip line-length and
@@ -274,7 +333,8 @@ Don't go looking for these — they aren't here:
 - No formatter (no `black`); no type checker (`mypy`, `pyright`).
 - No persistence — all state is in-memory (manager `dict`s/`list`s,
   dataclass instances). Nothing is written to disk.
-- No CLI, no web server, no API layer.
+- No web server and no API layer. `gstr2b_reconciliation_hack.py` has a CLI;
+  every other module is import-only.
 - No unit tests for the compliance/litigation modules yet — only the four
   core modules have `tests/`.
 
