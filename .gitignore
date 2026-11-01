@@ -3,3 +3,10 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+
+# Client workpapers written by the GSTR-2B tools - never commit client data
+gstr2b_*/
+GSTR2B_vs_Books_*.xlsx
+carry_forward_*.csv
+gstr2b_vs_books_*.csv
+/summary.txt
