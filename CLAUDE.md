@@ -276,28 +276,42 @@ produce the same output.
   and parts over `MAX_XLSX_PART_BYTES` (a workbook can arrive by e-mail; no
   `defusedxml`, because the tool is standard-library only). `.xls` is rejected
   with a message. `read_sheets("file.xlsx#Sheet name")` selects one sheet.
-- `map_columns` / `detect_header_row` map headers by alias, **best alias wins
+- `map_columns` / `detect_header_block` map headers by alias, **best alias wins
   whatever the column order**: `Doc No.` / `Supplier Invoice No` beat `Vch No.`,
-  `Doc date` beats the voucher `Date` (which becomes `booking_date`), and
-  `Original ...` columns of B2BA/CDNRA sheets are ignored so the revised
-  document is read. `load_records(path, source, side="portal"|"books")` reads
+  `Doc date` beats the voucher `Date` (which becomes `booking_date`), a bare
+  `Invoice` beside `Invoice No` is Tally's supplier invoice date, and `Original
+  ...` columns of B2BA/CDNRA sheets are ignored so the revised document is read.
+  **The portal stacks its headings** (`Invoice Details` over `Invoice number /
+  type / Date`, `Tax Amount` over the four taxes, `Original Details` / `Revised
+  Details` over an amendment): `combine_header_rows` folds one to three rows
+  into one label per column, a stacked block only counts when supplier GSTINs
+  sit beneath it (the portal's `Read me` sheet is running text), and `declared`
+  columns (`Amount declared by taxpayer for ITC reduction`) are never the
+  document's tax. `load_records(path, source, side="portal"|"books")` reads
   every sheet carrying the required columns; on the books side a Tally `Debit
-  Note` / purchase return is an ITC-reducing document (`CREDIT_NOTE`).
+  Note` / purchase return is an ITC-reducing document (`CREDIT_NOTE`). Workbook
+  escapes such as `_x000D_` are decoded.
 - `InvoiceRecord` (dataclass) normalises its own keys (`gstin_key`,
   `invoice_key` — `INV/001` == `INV-1` and leading zeros go — `trailing_number`,
-  `identity_key`, `sign_class`). Credit notes are signed negative in
+  which ignores a financial-year stamp so `ABC/25-26/54` and `0054/25-26` both
+  end in 54, `identity_key`, `sign_class`). Credit notes are signed negative in
   `__post_init__` whichever way the export wrote them. A row with neither a
   GSTIN-shaped supplier nor a document number, or one repeating the header
   text, is not a document (`Total` rows, section breaks).
 - `aggregate_records` sums multi-line documents per sheet (GSTR-2B splits an
   invoice rate-wise; a register splits it across ledgers). Number-less
-  documents are identified by voucher number, never merged. The same invoice
+  documents are identified by voucher number, never merged; so is a purchase
+  return in the books, which cites the *original* invoice's number (several
+  returns against one invoice are normal, not duplicates). The same invoice
   under two vouchers is a duplicate warning.
 - `GSTR2BReconciler.reconcile` runs five ordered passes — exact invoice no,
   normalised, trailing number (date+value guard), taxable value + date, and
-  supplier + value only (for number-less purchase returns) — assigning
-  candidates **best-first** (date gap, value gap, tax gap, sheet, row) so
-  nothing depends on file order. Invoices and credit notes never pair.
+  supplier + value only (for number-less documents and for purchase returns,
+  which cite the original invoice, never for an invoice with a number of its
+  own) — assigning candidates **best-first** (date gap, value gap, tax gap,
+  sheet, row; in the value-only pass the value fit comes first, the date means
+  nothing) so nothing depends on file order. `book_priority` lets a caller give
+  some books entries first claim. Invoices and credit notes never pair.
   Tolerances default to 3 days / ₹100 / ₹10 and raise `ValueError` if negative.
 - Flags: value, tax, head, rate (`RATE_DIFFERENCE`), date, `NO_DOC_REFERENCE`
   (weak match), ITC not available. A missing date alone is informational.
@@ -319,6 +333,18 @@ matches the month, tags every document, and rolls the registers forward.
   reversed under 4(B)(2) and *pends*, reclaimed under 4(D)(1) when booked; a
   books entry not in 2B is *deferred*, claimed when it reaches 2B. Both
   registers carry forward (`OpeningItems`, `write_carry_forward`).
+- **A register kept for the whole year** is a normal books input. A books entry
+  dated before the return month that is not in this GSTR-2B, reclaims nothing
+  and is not in the opening register is taken as dealt with in its own month's
+  return (`Workpaper.settled_earlier`, a note, and an action item when no
+  opening register was given) — otherwise every earlier purchase return would
+  be reversed again. A voucher in both the books file and the opening register
+  counts once, from the register, which also has first claim on GSTR-2B
+  documents. `load_opening_items` reads a firm's own cumulative tracker in place
+  and brings in only what is still open (`_still_open`: no reclaim month, no
+  `<serial> <Mon-yy>` GSTR-2B number against it, and — books side — deferred or
+  taken in 3B; a deferral marked `INELIGIBLE` never returns); a plain list of
+  open items such as the carry-forward CSVs is taken whole.
 - **Treatments** are the single source of truth: `Row2B.claim` and
   `RowBooks.claim` depend only on the tag, which is what the spreadsheet
   formulas read too. 2B lines: `CLAIM`, `CLAIM_PM_BOOKED`, `REVERSE_4B2`,
@@ -356,7 +382,12 @@ Differences, Reclaimed 4(D)(1), Carry-forward, Party-wise, Notes);
 - The workbook is deterministic: identical inputs give identical bytes (the
   run time goes in only if the CLI is not given `--no-timestamp`).
 - The CLI reads the month and GSTIN from the portal's file name
-  (`GSTR2B_<GSTIN>_<MMYYYY>.xlsx`) or `--period`. Opening registers come from
+  (`GSTR2B_<GSTIN>_<MMYYYY>.xlsx` or `<MMYYYY>_<GSTIN>_GSTR2B_<DDMMYYYY>.xlsx`),
+  failing that from the `Read me` sheet inside the download (financial year,
+  tax period, GSTIN, legal name — `read_portal_details`), or `--period`; it
+  notes it when the file's own header disagrees with the month or GSTIN being
+  run. A register or reclaim list with nothing in it keeps one blank row so its
+  totals never sum themselves (a circular reference). Opening registers come from
   `--opening-dir`, or `--opening-books-deferred` / `--opening-2b-pending`,
   which accept `file#Sheet` so existing tracker sheets can be read in place.
 
