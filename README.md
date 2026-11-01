@@ -257,10 +257,25 @@ print(notice.generate_expert_reply_template())
 
 #### 5. Monthly GSTR-2B vs Books ITC workpaper (Excel, offline)
 
-`gstr2b_workpaper_hack.py` runs the month the way a GST practice does, and
-writes an Excel workpaper. It is a command-line tool, and nothing is uploaded
-anywhere: the files are read from disk, matched on this machine, and the
-workpaper is written back to disk. The same inputs always give the same file.
+**The app - no commands.** Open `gstr2b_workpaper_app.html` in Chrome or Edge
+(double-click it). Choose the GSTR-2B download and the purchase register, press
+**Build the workpaper**, and save the Excel file. Last month's two carry-forward
+CSVs (or your own tracker workbooks, with a sheet chosen from a list) go in step
+2. **Try it with example data** shows what it does with an invented month.
+
+It runs the same Python engine as the command line, inside the browser tab
+([Pyodide](https://pyodide.org)). The page's own code makes no network request and
+carries a Content-Security-Policy that lets the browser contact one host only,
+`cdn.jsdelivr.net`, which supplies the Python runtime; so nothing you choose can be
+sent anywhere. The first open needs an internet connection to fetch the runtime
+(about 10 MB); the browser then keeps it, and later opens work without one. The
+file is generated from the engine's own source (`python3 gstr2b_app_hack.py`), and
+a test fails if the committed copy is out of date.
+
+**The command line.** `gstr2b_workpaper_hack.py` does the same from a terminal and
+is what the app runs. Nothing is uploaded anywhere: the files are read from disk,
+matched on this machine, and the workpaper is written back to disk. The same inputs
+always give the same file.
 
 ```bash
 # See it work on built-in demo data

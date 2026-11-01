@@ -28,6 +28,7 @@ jobs:
           python3 xlsx_writer_hack.py
           python3 gstr2b_itc_workflow_hack.py
           python3 gstr2b_workpaper_hack.py
+          python3 gstr2b_app_hack.py --check
 
       - name: Install ruff
         run: pip install ruff

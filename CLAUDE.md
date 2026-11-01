@@ -36,6 +36,9 @@ domain. They fall into three groups.
   command-line tool.
 - **XLSX Writer** (`xlsx_writer_hack.py`) — a standard-library `.xlsx` writer
   (styles, live formulas with cached values, validation, conditional colours).
+- **ITC App** (`gstr2b_app_hack.py`, `gstr2b_app_template.html`,
+  `gstr2b_workpaper_app.html`) — the workpaper as a one-file browser app: the page
+  runs the Python engine in a Web Worker with Pyodide. The HTML is generated.
 
 **Compliance / litigation modules** (larger, demo-only, document-heavy):
 
@@ -49,8 +52,9 @@ domain. They fall into three groups.
   — a structured tax-defence/case-management system (scrutiny, appeals,
   penalty, evidence, case law, drafting).
 
-There is no framework and no web entry point. Only the two reconciliation
-CLIs write files; everything else keeps its state in memory. The
+There is no framework and no web server. The one browser entry point is a
+single HTML file (`gstr2b_workpaper_app.html`, see **ITC App** below). Only the two
+reconciliation CLIs write files; everything else keeps its state in memory. The
 compliance/litigation modules generate large formatted text documents via
 multi-line string templates.
 
@@ -70,6 +74,9 @@ multi-line string templates.
 ├── gstr2b_itc_workflow_hack.py         # Monthly ITC process (engine, no spreadsheet code)
 ├── gstr2b_workpaper_hack.py            # Monthly ITC workpaper in Excel + CLI
 ├── xlsx_writer_hack.py                 # Stdlib-only .xlsx writer
+├── gstr2b_app_hack.py                  # What the browser app runs + its HTML generator
+├── gstr2b_app_template.html            # The app's screen (hand-written)
+├── gstr2b_workpaper_app.html           # GENERATED one-file app - never edit by hand
 ├── tests/
 │   ├── test_accounts.py
 │   ├── test_gst.py
@@ -77,6 +84,7 @@ multi-line string templates.
 │   ├── test_gstr2b_reconciliation.py
 │   ├── test_gstr2b_itc_workflow.py
 │   ├── test_gstr2b_workpaper.py
+│   ├── test_gstr2b_app.py
 │   └── test_xlsx_writer.py
 ├── pyproject.toml                      # project metadata + ruff config
 ├── README.md
@@ -122,6 +130,10 @@ python3 gstr2b_workpaper_hack.py \
 ```
 
 `xlsx_writer_hack.py` and `gstr2b_itc_workflow_hack.py` also have demo blocks.
+
+`python3 gstr2b_app_hack.py` rebuilds `gstr2b_workpaper_app.html`; after changing
+any engine module or `gstr2b_app_template.html` run it and commit the result
+(`--check` is a CI step, and `tests/test_gstr2b_app.py` fails on a stale file).
 
 The compliance/litigation modules (`gst_financial_governance.py`,
 `gst_case_drafting.py`, `icai_guidance_notes.py`,
@@ -391,6 +403,33 @@ Differences, Reclaimed 4(D)(1), Carry-forward, Party-wise, Notes);
   `--opening-dir`, or `--opening-books-deferred` / `--opening-2b-pending`,
   which accept `file#Sheet` so existing tracker sheets can be read in place.
 
+### `gstr2b_app_hack.py` and the app
+
+`gstr2b_workpaper_app.html` is the workpaper as an app for people who do not use a
+terminal: open it, choose the GSTR-2B download and the purchase register, press
+Build, save the Excel file. It is **generated** by `build_app()` from
+`gstr2b_app_template.html` plus the source of the five engine modules
+(`ENGINE_MODULES`, embedded as JSON), so it can never drift from the tested code.
+
+- `run_job(options, progress)` is what the page calls inside the browser: it builds
+  the CLI arguments from the page's choices, calls `gstr2b_workpaper_hack.run`, and
+  returns `{"ok": True, "summary", "text", "files"}` or `{"ok": False, "error"}`.
+  It **never raises** (a problem with the files must reach the screen in words);
+  `list_sheets` feeds the sheet drop-downs; `example_files()` is the invented month
+  behind "Try it with example data".
+- The page runs Pyodide (pinned, `PYODIDE_BASE`) in a Web Worker so it stays
+  responsive. **Privacy is enforced, not promised:** the template's
+  Content-Security-Policy allows `connect-src` to `cdn.jsdelivr.net` only, and tests
+  fail if the template ever contains `fetch(`, `XMLHttpRequest`, `sendBeacon`,
+  `WebSocket`, a form, an image or any other host. Everything shown that came from a
+  file is inserted as text (`h()` helper), never as HTML.
+- An in-chat Artifact page cannot host it: that sandbox blocks the runtime's
+  downloads and file saves. It is a file the user opens.
+- Checked in a real browser (headless Chromium) on the example and on real files:
+  the workbook was identical cell for cell to the command line's, only the CDN host
+  was contacted, a `fetch` to any other host was blocked by the policy, and a second
+  open worked with the network off (the browser cache holds the runtime).
+
 ### `xlsx_writer_hack.py`
 
 A small writer: `Workbook`, `Sheet`, `Style`, `Dxf`. `Sheet.write` /
@@ -466,7 +505,8 @@ Don't go looking for these — they aren't here:
   dataclass instances). The one exception is the reconciliation CLIs, which
   write their reports, the workpaper and the carry-forward CSVs.
 - No web server and no API layer. `gstr2b_reconciliation_hack.py` and
-  `gstr2b_workpaper_hack.py` have a CLI; every other module is import-only.
+  `gstr2b_workpaper_hack.py` have a CLI, and `gstr2b_workpaper_app.html` runs the
+  workpaper in the browser with no server; every other module is import-only.
 - No unit tests for the compliance/litigation modules yet — only the four
   core modules have `tests/`.
 
