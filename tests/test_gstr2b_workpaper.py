@@ -21,6 +21,7 @@ from gstr2b_itc_workflow_hack import (
     build_workpaper,
 )
 from gstr2b_reconciliation_hack import read_xlsx_sheets
+from xlsx_writer_hack import Workbook
 
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 SEP = Period(2026, 9)
@@ -34,6 +35,38 @@ def demo_work():
 
 def number(text):
     return float(text) if text not in ("", None) else 0.0
+
+
+def _column_number(letters):
+    value = 0
+    for char in letters:
+        value = value * 26 + ord(char) - 64
+    return value
+
+
+def self_referencing_formulas(path):
+    """[(sheet, cell, formula)] for formulas whose own cell is inside a range they sum."""
+    found = []
+    with zipfile.ZipFile(path) as archive:
+        names = [sheet.get("name") for sheet in ET.fromstring(
+            archive.read("xl/workbook.xml")).iter(f"{{{NS['m']}}}sheet")]
+        for index, name in enumerate(names, start=1):
+            root = ET.fromstring(archive.read(f"xl/worksheets/sheet{index}.xml"))
+            for cell in root.iter(f"{{{NS['m']}}}c"):
+                formula = cell.find("m:f", NS)
+                if formula is None or not formula.text:
+                    continue
+                ref = cell.get("r")
+                column, row = re.match(r"([A-Z]+)(\d+)", ref).groups()
+                # ranges on this sheet only: one with a sheet name in front belongs elsewhere
+                for left, right in re.findall(
+                        r"(?<![!\w$])(\$?[A-Z]{1,3}\$?\d+):(\$?[A-Z]{1,3}\$?\d+)", formula.text):
+                    (c1, r1), (c2, r2) = (re.match(r"\$?([A-Z]+)\$?(\d+)", end).groups()
+                                          for end in (left, right))
+                    if (_column_number(c1) <= _column_number(column) <= _column_number(c2)
+                            and min(int(r1), int(r2)) <= int(row) <= max(int(r1), int(r2))):
+                        found.append((name, ref, formula.text))
+    return found
 
 
 class WorkbookFixture(unittest.TestCase):
@@ -255,6 +288,16 @@ class EmptyAndEdgeTests(unittest.TestCase):
         self.assertEqual(checks["Every line carries a recognised treatment"], "OK")
         self.assertIn("No action required", " ".join(r[0] for r in summary if r))
 
+    def test_no_formula_sums_a_range_that_contains_itself(self):
+        # An empty register or an empty reclaim list left its totals row summing itself - a
+        # circular reference Excel warns about on opening. It only shows when a list is empty.
+        empty_registers = build_workpaper([], [], SEP)
+        with tempfile.TemporaryDirectory() as folder:
+            for label, work in (("empty", empty_registers), ("demo", demo_work())):
+                path = os.path.join(folder, f"{label}.xlsx")
+                wp.build_workbook(work).save(path)
+                self.assertEqual(self_referencing_formulas(path), [], label)
+
     def test_identical_inputs_give_identical_bytes(self):
         with tempfile.TemporaryDirectory() as folder:
             first, second = (os.path.join(folder, name) for name in ("a.xlsx", "b.xlsx"))
@@ -278,6 +321,37 @@ class EmptyAndEdgeTests(unittest.TestCase):
         self.assertEqual(wp.infer_from_filename("returns.xlsx"), ("", None))
         gstin, period = wp.infer_from_filename("gstr2b-19AAAAA0000A1Z5-042026.xlsx")
         self.assertEqual(period, Period(2026, 4))
+
+    def test_file_name_hints_in_the_month_first_form(self):
+        # the portal also names its download <MMYYYY>_<GSTIN>_GSTR2B_<date generated>.xlsx
+        name = "/x/112025_19AAAAA0000A1Z5_GSTR2B_15122025.xlsx"
+        self.assertEqual(wp.infer_from_filename(name), ("19AAAAA0000A1Z5", Period(2025, 11)))
+        prefixed = "7f3a-112025_19AAAAA0000A1Z5_GSTR2B_15122025.xlsx"
+        self.assertEqual(wp.infer_from_filename(prefixed)[1], Period(2025, 11))
+        self.assertEqual(wp.infer_from_filename("112025_19AAAAA0000A1Z5_GSTR3B_15122025.xlsx"),
+                         ("", None))
+        self.assertEqual(wp.infer_from_filename("132025_19AAAAA0000A1Z5_GSTR2B_1.xlsx")[1], None)
+
+    def test_the_period_from_the_portal_header(self):
+        details = {"financial_year": "2025-26", "tax_period": "November"}
+        self.assertEqual(wp.period_from_details(details), Period(2025, 11))
+        details = {"financial_year": "2025-26", "tax_period": "February"}
+        self.assertEqual(wp.period_from_details(details), Period(2026, 2))
+        self.assertIsNone(wp.period_from_details({"financial_year": "2025-26"}))
+        self.assertIsNone(wp.period_from_details({"tax_period": "March"}))
+        self.assertIsNone(wp.period_from_details({"financial_year": "2025-26",
+                                                  "tax_period": "Quarter 3"}))
+
+    def test_a_disagreeing_header_is_flagged(self):
+        details = {"financial_year": "2025-26", "tax_period": "October",
+                   "gstin": "19AAAAA0000A1Z5"}
+        self.assertEqual(wp.check_against_portal(Period(2025, 10), "19AAAAA0000A1Z5", details),
+                         [])
+        notes = wp.check_against_portal(Period(2025, 11), "27BBBBB2222B1Z2", details)
+        self.assertEqual(len(notes), 2)
+        self.assertIn("October 2025", notes[0])
+        self.assertIn("19AAAAA0000A1Z5", notes[1])
+        self.assertEqual(wp.check_against_portal(Period(2025, 11), "", {}), [])
 
     def test_treatment_lists_cover_every_tag(self):
         self.assertEqual(set(wp.ALL_TAGS), set(wf.TREATMENT_HELP))
@@ -417,6 +491,63 @@ class CommandLineTests(unittest.TestCase):
         code, _out, err = run_cli("--gstr2b", renamed, "--books", books)
         self.assertEqual(code, 2)
         self.assertIn("--period", err)
+
+    def portal_download(self, name, tax_period="November"):
+        """A workbook laid out like the portal's: a 'Read me' sheet and a stacked-heading B2B."""
+        book = Workbook()
+        readme = book.add_sheet("Read me")
+        for row, cells in enumerate([
+            ["Goods and Services Tax  - GSTR-2B"], [], [],
+            ["Financial Year", "", "2025-26"], ["Tax Period", "", tax_period],
+            ["GSTIN", "", A], ["Legal Name", "", "Alpha Traders"],
+            ["Trade Name (if any)", "", "Alpha Traders"], ["Date of generation", "", "14/12/2025"],
+        ]):
+            for column, value in enumerate(cells):
+                if value:
+                    readme.write(row, column, value)
+        b2b = book.add_sheet("B2B")
+        top = ["GSTIN of supplier", "Trade/Legal name", "Invoice Details", "", "", "",
+               "Taxable Value (₹)", "Tax Amount", "", "", "", "ITC Availability"]
+        sub = ["", "", "Invoice number", "Invoice type", "Invoice Date", "Invoice Value(₹)", "",
+               "Integrated Tax(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Cess(₹)", ""]
+        data = [A, "Alpha", "X1", "B2B", "03/11/2025", 1180, 1000, 180, 0, 0, 0, "Yes"]
+        for row, cells in enumerate([["Taxable inward supplies"], top, sub, data], start=3):
+            for column, value in enumerate(cells):
+                if value != "":
+                    b2b.write(row, column, value)
+        path = self.path(name)
+        book.save(path)
+        return path
+
+    def november_books(self):
+        books = self.path("books_nov.csv")
+        write_csv(books, BOOKS_HEADER, [
+            ["04-11-2025", "Alpha", A, PURCHASE, "V1", "X1", "03-11-2025", 1000, 180, 0, 0],
+        ])
+        return books
+
+    def test_month_gstin_and_client_come_from_the_portal_header(self):
+        two_b = self.portal_download("download.xlsx")        # a name that carries no hints
+        code, out, err = run_cli("--gstr2b", two_b, "--books", self.november_books(),
+                                 "--outdir", self.path("nov"), "--no-timestamp")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("November 2025", out)
+        self.assertIn(A, out)
+        self.assertTrue(os.path.exists(self.path("nov", wp.workpaper_filename(Period(2025, 11)))))
+        sheets = dict(read_xlsx_sheets(self.path("nov", wp.workpaper_filename(Period(2025, 11)))))
+        banner = " ".join(" ".join(r) for r in sheets[wp.SHEET_SUMMARY][:4] if r)
+        self.assertIn("Alpha Traders", banner)
+
+    def test_a_file_that_contradicts_its_own_header_is_flagged_in_the_notes(self):
+        two_b = self.portal_download("download.xlsx", tax_period="October")
+        code, _out, err = run_cli("--gstr2b", two_b, "--books", self.november_books(),
+                                  "--period", "2025-11", "--gstin", "27BBBBB2222B1Z2",
+                                  "--outdir", self.path("nov"), "--no-timestamp", "--quiet")
+        self.assertEqual((code, err), (0, ""))
+        sheets = dict(read_xlsx_sheets(self.path("nov", wp.workpaper_filename(Period(2025, 11)))))
+        notes = "\n".join(" ".join(r) for r in sheets[wp.SHEET_NOTES] if r)
+        self.assertIn("the file's own header says October 2025", notes)
+        self.assertIn(f"names GSTIN {A}", notes)
 
     def test_period_flag_overrides_the_file_name(self):
         two_b, books = self.august()
