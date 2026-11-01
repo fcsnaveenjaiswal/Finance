@@ -39,7 +39,7 @@ import sys
 import tempfile
 import zipfile
 from datetime import date, datetime
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from gstr2b_itc_workflow_hack import (
     CARRY_2B_FILE,
@@ -1571,35 +1571,57 @@ def _opening_path(explicit: Optional[str], directory: Optional[str], name: str) 
     return ""
 
 
+def run(
+    args: argparse.Namespace,
+    progress: Optional[Callable[[str], None]] = None,
+) -> Tuple[Workpaper, List[str]]:
+    """
+    Read the files, build the month and write the workpaper; return the Workpaper and
+    the paths written. Raises ValueError for a problem with the inputs and OSError for
+    one with the disk. `progress`, when given, is told what step is under way.
+    """
+    def step(text: str) -> None:
+        if progress is not None:
+            progress(text)
+
+    gstin_hint, period_hint = infer_from_filename(args.gstr2b)
+    details = read_portal_details(args.gstr2b)
+    period = (require_period(args.period) if args.period
+              else period_hint or period_from_details(details))
+    if period is None:
+        raise ValueError("say which month this is with --period, e.g. --period 2026-09")
+    stated_gstin = args.gstin or gstin_hint
+    step("Reading the GSTR-2B download")
+    gstr2b, notes_2b = load_records(args.gstr2b, SOURCE_GSTR2B, side="portal")
+    notes_2b += check_against_portal(period, stated_gstin, details)
+    step("Reading the purchase register")
+    books, notes_books = load_records(args.books, SOURCE_BOOKS, side="books")
+    step("Reading last month's open items")
+    opening = load_opening_items(
+        _opening_path(args.opening_books_deferred, args.opening_dir, CARRY_BOOKS_FILE),
+        _opening_path(args.opening_2b_pending, args.opening_dir, CARRY_2B_FILE))
+    step("Matching GSTR-2B against the books")
+    work = build_workpaper(
+        gstr2b, books, period, opening,
+        reconciler=GSTR2BReconciler(args.date_tolerance, args.value_tolerance,
+                                    args.tax_tolerance),
+        cn_policy=args.cn_policy, client=args.client or details.get("legal_name", ""),
+        gstin=(stated_gstin or details.get("gstin", "")).upper(),
+        read_notes=notes_2b + notes_books)
+    outdir = args.outdir or f"gstr2b_{period.label}"
+    stamp = "" if args.no_timestamp else datetime.now().strftime("%d-%b-%Y %H:%M")
+    files = {"gstr2b": os.path.basename(split_file_spec(args.gstr2b)[0]),
+             "books": os.path.basename(split_file_spec(args.books)[0])}
+    step("Writing the Excel workpaper")
+    written = write_workpaper(work, outdir, files, stamp)
+    return work, written
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the workpaper from the command line. Returns an exit code."""
     args = build_arg_parser().parse_args(argv)
     try:
-        gstin_hint, period_hint = infer_from_filename(args.gstr2b)
-        details = read_portal_details(args.gstr2b)
-        period = (require_period(args.period) if args.period
-                  else period_hint or period_from_details(details))
-        if period is None:
-            raise ValueError("say which month this is with --period, e.g. --period 2026-09")
-        stated_gstin = args.gstin or gstin_hint
-        gstr2b, notes_2b = load_records(args.gstr2b, SOURCE_GSTR2B, side="portal")
-        notes_2b += check_against_portal(period, stated_gstin, details)
-        books, notes_books = load_records(args.books, SOURCE_BOOKS, side="books")
-        opening = load_opening_items(
-            _opening_path(args.opening_books_deferred, args.opening_dir, CARRY_BOOKS_FILE),
-            _opening_path(args.opening_2b_pending, args.opening_dir, CARRY_2B_FILE))
-        work = build_workpaper(
-            gstr2b, books, period, opening,
-            reconciler=GSTR2BReconciler(args.date_tolerance, args.value_tolerance,
-                                        args.tax_tolerance),
-            cn_policy=args.cn_policy, client=args.client or details.get("legal_name", ""),
-            gstin=(stated_gstin or details.get("gstin", "")).upper(),
-            read_notes=notes_2b + notes_books)
-        outdir = args.outdir or f"gstr2b_{period.label}"
-        stamp = "" if args.no_timestamp else datetime.now().strftime("%d-%b-%Y %H:%M")
-        files = {"gstr2b": os.path.basename(split_file_spec(args.gstr2b)[0]),
-                 "books": os.path.basename(split_file_spec(args.books)[0])}
-        written = write_workpaper(work, outdir, files, stamp)
+        work, written = run(args)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
