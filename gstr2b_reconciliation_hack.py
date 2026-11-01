@@ -1680,6 +1680,15 @@ def read_xlsx_sheets(path: str) -> List[Tuple[str, List[List[str]]]]:
         raise ValueError(f"{path} is not a readable .xlsx workbook ({error})") from error
 
 
+def xlsx_sheet_names(path: str) -> List[str]:
+    """The sheet names of a workbook, in order, without reading any of its rows."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return [name for name, _target in _xlsx_sheet_paths(archive)]
+    except zipfile.BadZipFile as error:
+        raise ValueError(f"{path} is not a readable .xlsx workbook ({error})") from error
+
+
 def _xlsx_rows(
     archive: zipfile.ZipFile,
     sheet_path: str,
