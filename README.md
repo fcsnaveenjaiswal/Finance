@@ -280,7 +280,11 @@ python3 gstr2b_workpaper_hack.py \
 ```
 
 The month and GSTIN are read from the portal's file name
-(`GSTR2B_<GSTIN>_<MMYYYY>.xlsx`); otherwise pass `--period 2026-09`.
+(`GSTR2B_<GSTIN>_<MMYYYY>.xlsx` or `<MMYYYY>_<GSTIN>_GSTR2B_<DDMMYYYY>.xlsx`)
+or, failing that, from the `Read me` sheet inside the download (it also supplies
+the client's legal name); otherwise pass `--period 2026-09`. If the file's own
+header names a different month or GSTIN than the one being run, the Notes sheet
+says so.
 
 **The process it follows.** GSTR-3B Table 4(A)(5) is kept tied to GSTR-2B.
 A GSTR-2B line that is not yet in the books is *reversed* under 4(B)(2),
@@ -314,7 +318,9 @@ blue is an input or tag you may change, black is a formula, yellow needs a
 look.
 
 **Starting from your existing trackers.** The opening registers can be your
-own tracker sheets, read in place with `FILE#SHEET`:
+own tracker sheets, read in place with `FILE#SHEET`. A tracker that keeps the
+whole year (every row, with the closed ones marked by a reclaim month or a
+`<serial> <Mon-yy>` GSTR-2B number) brings in only what is still open:
 
 ```bash
 python3 gstr2b_workpaper_hack.py --gstr2b ... --books ... --period 2026-09 \
@@ -332,12 +338,29 @@ python3 gstr2b_workpaper_hack.py --gstr2b ... --books ... --period 2026-09 \
 | `--no-timestamp` | off | leave the run time out so identical inputs give identical bytes |
 
 It copes with what actually breaks a monthly reconciliation: the portal's
-banner rows, `Read me` sheet and B2B/B2BA/credit-note sheets; Tally's
-`Doc No.` (supplier number) vs `Vch No.` (internal number); number-less debit
-notes (purchase returns) matched on supplier and value; invoice numbers
-written differently on each side (`INV/001` vs `INV-1`, leading zeros); an
-invoice split rate-wise or across expense ledgers; `Total` rows; Excel date
-serials; reverse-charge rows (listed, not matched); and double entries.
+banner rows, two- and three-row stacked headings, `Read me` sheet and
+B2B/B2BA/credit-note sheets; Tally's `Doc No.` (supplier number) vs `Vch No.`
+(internal number) and the supplier's invoice date printed under a bare `Invoice`;
+purchase returns (debit notes) matched on supplier and value, since they cite
+the original invoice rather than the supplier's credit-note number; invoice
+numbers written differently on each side (`INV/001` vs `INV-1`, leading zeros,
+`ABC/25-26/54` vs `0054/25-26`); an invoice split rate-wise or across expense
+ledgers; `Total` rows; Excel date serials and `_x000D_` escapes; reverse-charge
+rows (listed, not matched); double entries; and a register kept for the whole
+year (earlier-dated entries are taken as dealt with in their own month's
+return unless the opening register says they are still open).
+
+Run against a firm's real files - a genuine GSTR-2B download and a seven-month
+Tally GSTR-3B voucher register carrying the firm's own month-by-month tagging -
+the tool, re-performing each month from scratch with opening registers taken from
+those tags (and, for April, the purchase returns still open from March), agreed
+with the firm's treatment of 98.6% of 2,450 GSTR-2B lines, and its net ITC over the
+seven months was within 0.9% of what the firm's tags add up to (no single
+month more than 2.6% out). What is left is
+judgement (a bill marked ineligible, a credit note rejected as not ours) and
+books errors (a supplier booked under another party's GSTIN, an invoice date
+typed a week off), which the tool leaves unpaired for review rather than
+guesses at.
 
 *Not covered:* ISD and import credit, the outward-supply reconciliation, the
 reverse-charge workings, Rule 42/43. Treatments are defaults to review, and the

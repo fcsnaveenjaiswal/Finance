@@ -57,7 +57,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 # Indicative review tolerances. Dates drift by a day or two between the
 # supplier's books and ours; small value gaps are usually rounding.
@@ -189,9 +189,25 @@ def normalise_invoice_no(value: str) -> str:
     return _LEADING_ZEROS.sub(lambda match: match.group(1), cleaned)
 
 
+# A financial-year stamp inside an invoice number: '25-26', '2025-26', '2025/2026'.
+_FY_STAMP = re.compile(r"(?<![0-9])(20\d{2}|\d{2})\s*[-/]\s*(20\d{2}|\d{2})(?![0-9])")
+
+
+def _without_fy_stamps(value: str) -> str:
+    """Blank out the financial-year stamps (two consecutive years) in an invoice number."""
+    def blank(match: "re.Match[str]") -> str:
+        first, second = int(match.group(1)[-2:]), int(match.group(2)[-2:])
+        return " " if second == (first + 1) % 100 and 14 <= first <= 45 else match.group(0)
+    return _FY_STAMP.sub(blank, value)
+
+
 def invoice_trailing_number(value: str) -> str:
-    """Return the last run of digits in an invoice number, zeros stripped."""
-    match = _TRAILING_DIGITS.search(value or "")
+    """
+    Return the last run of digits in an invoice number, zeros stripped, leaving out any
+    financial-year stamp: 'ABC/25-26/54' and '0054/25-26' both end in 54, not in 26.
+    """
+    text = value or ""
+    match = _TRAILING_DIGITS.search(_without_fy_stamps(text)) or _TRAILING_DIGITS.search(text)
     return str(int(match.group(1))) if match else ""
 
 
@@ -358,6 +374,7 @@ class InvoiceRecord:
     period_ref: str = ""
     origin_period: str = ""
     taken_in_3b: bool = False
+    reclaimed: str = ""
     remarks: str = ""
     voucher_nos: List[str] = field(default_factory=list)
 
@@ -408,8 +425,13 @@ class InvoiceRecord:
         The supplier's document number when there is one. A document with no
         number (a Tally debit note carries only its own voucher number) falls
         back to that voucher number, and failing that to its row, so that
-        several number-less documents from one supplier are never merged.
+        several number-less documents from one supplier are never merged. A
+        purchase return in the books is its voucher number even when it cites an
+        invoice: several returns against one invoice share the cited number and
+        are still separate documents.
         """
+        if self.voucher_no and self.source == SOURCE_BOOKS and self.sign_class == "C":
+            return "V:" + self.voucher_no.strip().upper()
         if self.invoice_key:
             return self.invoice_key
         if self.voucher_no:
@@ -450,7 +472,8 @@ def _merge_into(existing: InvoiceRecord, record: InvoiceRecord) -> None:
         if number not in existing.voucher_nos:
             existing.voucher_nos.append(number)
     for name in ("supplier_name", "voucher_no", "voucher_type", "reason", "ref", "gstr1_period",
-                 "gstr1_filing_date", "period_ref", "origin_period", "remarks", "invoice_date"):
+                 "gstr1_filing_date", "period_ref", "origin_period", "reclaimed", "remarks",
+                 "invoice_date"):
         if not getattr(existing, name):
             setattr(existing, name, getattr(record, name))
     if record.booking_date and (not existing.booking_date
@@ -502,9 +525,12 @@ def find_duplicate_documents(records: Sequence[InvoiceRecord]) -> List[str]:
 
     Two cases: the same supplier + invoice number appearing as more than one
     document (two dates for the same bill), and one document booked under
-    more than one voucher. Returned sorted, so the warning list is stable.
+    more than one voucher. Returned sorted, so the warning list is stable. A purchase
+    return in the books is left out of both: it cites the original invoice's number,
+    and several returns against one invoice are normal.
     """
     groups: Dict[Tuple[str, str], List[InvoiceRecord]] = {}
+    records = [r for r in records if not (r.source == SOURCE_BOOKS and r.sign_class == "C")]
     for record in records:
         if not record.gstin_key or not record.invoice_key:
             continue
@@ -572,6 +598,7 @@ class GSTR2BReconciler:
         date_tolerance_days: int = DEFAULT_DATE_TOLERANCE_DAYS,
         taxable_tolerance: float = DEFAULT_TAXABLE_TOLERANCE,
         tax_tolerance: float = DEFAULT_TAX_TOLERANCE,
+        book_priority: Optional[Callable[[InvoiceRecord], int]] = None,
     ) -> None:
         if date_tolerance_days < 0:
             raise ValueError("date_tolerance_days cannot be negative")
@@ -582,6 +609,9 @@ class GSTR2BReconciler:
         self.date_tolerance_days = int(date_tolerance_days)
         self.taxable_tolerance = float(taxable_tolerance)
         self.tax_tolerance = float(tax_tolerance)
+        # Optional: a books document with a lower number is assigned first within each
+        # pass, so a caller can give some entries (a register of open items) first claim.
+        self.book_priority = book_priority
 
     def reconcile(
         self,
@@ -616,7 +646,9 @@ class GSTR2BReconciler:
                 for position in index.get(key, []):
                     if strict and not self._admissible(portal[position], book, basis):
                         continue
-                    rank = self._rank(portal[position], book) + (book.sheet, book.row_id)
+                    priority = self.book_priority(book) if self.book_priority else 0
+                    rank = ((priority,) + self._rank(portal[position], book, basis)
+                            + (book.sheet, book.row_id))
                     candidates.append((rank, position, book_position))
             candidates.sort(key=lambda item: item[0])
             for _rank, position, book_position in candidates:
@@ -683,11 +715,14 @@ class GSTR2BReconciler:
         """Guard for the weaker passes."""
         if basis is MatchBasis.SUPPLIER_VALUE_ONLY:
             # Only for documents that carry no supplier document number (a Tally
-            # debit note), and then on value alone: the voucher date says little
-            # about when the supplier issued its credit note.
+            # debit note) and for purchase returns, which usually cite the original
+            # invoice rather than the supplier's credit-note number; and then on
+            # value alone: the voucher date says little about when the supplier
+            # issued its credit note, and the date a return cites is the original
+            # invoice's. An invoice with a number of its own is never paired this way.
             tax_gap = abs(book.total_tax - portal.total_tax)
             return (
-                (not book.invoice_key or not portal.invoice_key)
+                (not book.invoice_key or not portal.invoice_key or portal.sign_class == "C")
                 and self._value_close(portal, book)
                 and tax_gap <= self.tax_tolerance + 1e-9
             )
@@ -700,16 +735,22 @@ class GSTR2BReconciler:
         self,
         portal: InvoiceRecord,
         book: InvoiceRecord,
-    ) -> Tuple[int, float, float, str, int]:
-        """Candidate ranking - closest date, then value, then tax, then row."""
+        basis: Optional[MatchBasis] = None,
+    ) -> Tuple[float, float, float, str, int]:
+        """
+        Candidate ranking - closest date, then value, then tax, then row.
+
+        On value alone (the weak pass) the date says nothing - a return cites the
+        original invoice's - so there the closest value, then tax, comes first and the
+        date only breaks a tie.
+        """
         gap = self._date_gap(portal, book)
-        return (
-            10 ** 6 if gap is None else gap,
-            round(abs(book.taxable_value - portal.taxable_value), 2),
-            round(abs(book.total_tax - portal.total_tax), 2),
-            portal.sheet,
-            portal.row_id,
-        )
+        date_rank = 10 ** 6 if gap is None else gap
+        taxable_rank = round(abs(book.taxable_value - portal.taxable_value), 2)
+        tax_rank = round(abs(book.total_tax - portal.total_tax), 2)
+        if basis is MatchBasis.SUPPLIER_VALUE_ONLY:
+            return (taxable_rank, tax_rank, date_rank, portal.sheet, portal.row_id)
+        return (date_rank, taxable_rank, tax_rank, portal.sheet, portal.row_id)
 
     def _is_rate_difference(
         self,
@@ -1291,6 +1332,7 @@ COLUMN_ALIASES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "deffered month", "defferred ineligiable month", "deferred ineligible month",
     )),
     ("taken_in_3b", ("taken in gstr 3b", "taken in 3b")),
+    ("reclaimed", ("reclaimed month", "reclaim month", "reclaimed in")),
     ("serial", ("sl no", "sr no", "serial no", "serial")),
     ("supplier_name", (
         "trade legal name", "legal name", "trade name", "supplier name", "party name",
@@ -1304,9 +1346,10 @@ OPTIONAL_COLUMNS: Tuple[str, ...] = ("invoice_date", "igst", "cgst", "sgst")
 
 # A header carrying any of these words is never mapped. They are the columns that
 # look like the ones wanted but are not: 'IRN date', 'Rate(%)', 'Applicable % of
-# Tax Rate', and the 'Original ...' columns of an amended (B2BA/CDNRA) sheet,
-# where the revised document is the one that counts.
-_IGNORED_HEADER_TOKENS = frozenset({"irn", "rate", "checksum", "original"})
+# Tax Rate', the 'Original ...' columns of an amended (B2BA/CDNRA) sheet, where the
+# revised document is the one that counts, and the credit-note sheets' 'Amount
+# declared by taxpayer for ITC reduction', which repeats the four tax headings.
+_IGNORED_HEADER_TOKENS = frozenset({"irn", "rate", "checksum", "original", "declared"})
 
 # A header that is only the word "date" is the voucher date in a books register
 # and the invoice date when it is the only date there is.
@@ -1340,6 +1383,15 @@ def map_columns(headers: Sequence[str]) -> Dict[str, int]:
         if best is not None:
             mapping[fieldname] = best[1]
             used.add(best[1])
+    if "invoice_date" not in mapping and "invoice_no" in mapping:
+        # Tally's voucher register prints the supplier's invoice date under a header
+        # that is only 'Invoice', right beside 'Invoice No'. Without this the voucher date
+        # (about a week later) would stand in for it and the date check would reject
+        # every pair.
+        after = mapping["invoice_no"] + 1
+        if after in usable and after not in used and normalised[after] == "invoice":
+            mapping["invoice_date"] = after
+            used.add(after)
     bare = [index for index in usable if index not in used
             and normalised[index] in _BARE_DATE_HEADERS]
     if bare:
@@ -1360,31 +1412,143 @@ def _has_required(mapping: Dict[str, int]) -> List[str]:
     return [name for name in REQUIRED_COLUMNS if name not in mapping]
 
 
+# The portal prints a group heading over its sub-headings: 'Invoice Details' over
+# 'Invoice number / Invoice type / Invoice Date', 'Tax Amount' over the four tax
+# columns, and on an amended document 'Original Details' / 'Revised Details' over
+# whole blocks. A heading block is therefore up to this many rows tall.
+MAX_HEADER_ROWS = 3
+
+
+def _is_data_like(text: str) -> bool:
+    """A cell that holds a value (a GSTIN, a date, a number) rather than a column heading."""
+    return looks_like_gstin(text) or parse_date(text) is not None
+
+
+def _is_heading_row(row: Sequence[str]) -> bool:
+    """A row of column headings: two or more labels and nothing that looks like data."""
+    cells = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
+    return len(cells) >= 2 and not any(_is_data_like(text) for text in cells)
+
+
+def _documents_below(
+    rows: Sequence[Sequence[str]],
+    last: int,
+    mapping: Dict[str, int],
+    limit: int = 400,
+) -> bool:
+    """
+    True when the rows under a stacked heading hold supplier GSTINs, or hold nothing.
+
+    Several rows of running text (the portal's 'Read me' sheet) can be folded into
+    something that looks like a heading, so a stacked heading only counts when a
+    table of documents sits beneath it. An amendment sheet with no amendments has
+    nothing beneath its heading and is accepted: it reads as zero rows.
+    """
+    column = mapping.get("gstin")
+    seen = False
+    for row in rows[last + 1:last + 1 + limit]:
+        if not any(cell is not None and str(cell).strip() for cell in row):
+            continue
+        seen = True
+        if column is not None and column < len(row) and row[column] is not None \
+                and looks_like_gstin(str(row[column])):
+            return True
+    return not seen
+
+
+def combine_header_rows(block: Sequence[Sequence[str]]) -> List[str]:
+    """
+    Fold stacked heading rows into one label per column.
+
+    A group heading sits in the first column it covers (the rest is a merged cell
+    that reads as empty), so it is carried to the right across the columns that
+    have a sub-heading below them. A column's label is its headings read top to
+    bottom: 'Invoice Details Invoice number', 'Tax Amount Central Tax(Rs)'. A
+    single row comes back unchanged.
+    """
+    width = max((len(row) for row in block), default=0)
+    cells = [
+        [str(row[column]).strip() if column < len(row) and row[column] is not None else ""
+         for column in range(width)]
+        for row in block
+    ]
+    labels: List[List[str]] = [[] for _ in range(width)]
+    for depth, row in enumerate(cells):
+        below = cells[depth + 1:]
+        carried = ""
+        for column in range(width):
+            text = row[column]
+            if text:
+                carried = text
+            elif not (carried and any(lower[column] for lower in below)):
+                carried = ""
+                continue
+            if not labels[column] or labels[column][-1] != carried:
+                labels[column].append(carried)
+    return [" ".join(parts) for parts in labels]
+
+
+def detect_header_block(
+    rows: Sequence[Sequence[str]],
+    max_scan: int = 25,
+) -> Tuple[int, int, Dict[str, int], List[str]]:
+    """
+    Find the heading rows of a sheet that still has its title/preamble rows.
+
+    The GSTR-2B download carries several banner rows above the headings, and the
+    headings themselves are stacked (see MAX_HEADER_ROWS), so every run of one to
+    three rows is scored as a candidate and the best wins; on a tie the shorter
+    and earlier block does, so a plain one-row header is read exactly as before.
+    Returns (first row, last row, field -> column, leaf label per column) with
+    zero-based row indexes; the data starts below the last row. Raises ValueError
+    when no block carries the columns needed to reconcile.
+    """
+    best: Optional[Tuple[int, int, Dict[str, int], List[str]]] = None
+    best_score = 0
+    for first in range(min(max_scan, len(rows))):
+        for height in range(1, MAX_HEADER_ROWS + 1):
+            last = first + height - 1
+            if last >= len(rows):
+                break
+            block = rows[first:last + 1]
+            if height > 1 and not all(_is_heading_row(row) for row in block):
+                break                       # a taller block would only swallow data rows
+            mapping = map_columns(combine_header_rows(block))
+            score = len(mapping) + 3 * sum(1 for name in REQUIRED_COLUMNS if name in mapping)
+            if height > 1 and score > best_score and not _documents_below(rows, last, mapping):
+                continue
+            if score > best_score:
+                width = max(len(row) for row in block)
+                leaf = [
+                    next((str(row[column]).strip() for row in reversed(block)
+                          if column < len(row) and row[column] is not None
+                          and str(row[column]).strip()), "")
+                    for column in range(width)
+                ]
+                best, best_score = (first, last, mapping, leaf), score
+    missing = _has_required(best[2]) if best else list(REQUIRED_COLUMNS)
+    if best is None or missing:
+        found = ", ".join(sorted(best[2])) if best else "none"
+        raise ValueError(
+            f"no usable header row found (missing: {', '.join(missing) or 'everything'}; "
+            f"recognised: {found or 'none'})"
+        )
+    return best
+
+
 def detect_header_row(
     rows: Sequence[Sequence[str]],
     max_scan: int = 25,
 ) -> Tuple[int, Dict[str, int]]:
     """
-    Find the header row in a sheet that still has its title/preamble rows.
+    Find the last heading row of a sheet and the field -> column mapping.
 
-    The GSTR-2B download carries several banner rows above the real header, so
-    the first rows are scored and the best one wins. Raises ValueError when no
-    row carries the columns needed to reconcile.
+    The rows below it are the data. See detect_header_block, which also reports
+    where a stacked heading starts. Raises ValueError when no row carries the
+    columns needed to reconcile.
     """
-    best_index, best_mapping, best_score = -1, {}, 0
-    for index, row in enumerate(rows[:max_scan]):
-        mapping = map_columns(row)
-        score = len(mapping) + 3 * sum(1 for name in REQUIRED_COLUMNS if name in mapping)
-        if score > best_score:
-            best_index, best_mapping, best_score = index, mapping, score
-    missing = _has_required(best_mapping)
-    if best_index < 0 or missing:
-        found = ", ".join(sorted(best_mapping)) or "none"
-        raise ValueError(
-            f"no usable header row found (missing: {', '.join(missing) or 'everything'}; "
-            f"recognised: {found})"
-        )
-    return best_index, best_mapping
+    _first, last, mapping, _leaf = detect_header_block(rows, max_scan)
+    return last, mapping
 
 
 def read_csv_rows(path: str) -> List[List[str]]:
@@ -1439,12 +1603,28 @@ def _xlsx_column_index(ref: str) -> int:
     return max(0, index - 1)
 
 
+_OOXML_ESCAPE = re.compile(r"_x([0-9A-Fa-f]{4})_")
+
+
+def _unescape_ooxml(text: str) -> str:
+    """
+    Undo the '_xHHHH_' escapes a workbook uses for characters XML cannot carry.
+
+    Tally and Excel write a line break inside a cell as '_x000D_' (or '_x000A_'), and a
+    literal underscore that would read as an escape as '_x005F_'. Left alone they sit
+    inside a document number and stop it matching.
+    """
+    if "_x" not in text:
+        return text
+    return _OOXML_ESCAPE.sub(lambda match: chr(int(match.group(1), 16)), text)
+
+
 def _xlsx_shared_strings(archive: zipfile.ZipFile) -> List[str]:
     if "xl/sharedStrings.xml" not in archive.namelist():
         return []
     root = _safe_xml(archive, "xl/sharedStrings.xml")
     return [
-        "".join(node.text or "" for node in item.iter(f"{_XLSX_NS}t"))
+        _unescape_ooxml("".join(node.text or "" for node in item.iter(f"{_XLSX_NS}t")))
         for item in root.findall(f"{_XLSX_NS}si")
     ]
 
@@ -1520,7 +1700,7 @@ def _xlsx_rows(
             kind = cell.get("t")
             if kind == "inlineStr":
                 inline = cell.find(f"{_XLSX_NS}is")
-                cells[column] = (
+                cells[column] = _unescape_ooxml(
                     "".join(node.text or "" for node in inline.iter(f"{_XLSX_NS}t"))
                     if inline is not None else ""
                 )
@@ -1655,6 +1835,7 @@ def record_from_row(
         period_ref=cell("period_ref"),
         origin_period=cell("origin_period"),
         taken_in_3b=_flag_text(cell("taken_in_3b")),
+        reclaimed=cell("reclaimed"),
         remarks=cell("remarks"),
     )
 
@@ -1683,17 +1864,19 @@ def load_records(
     sheets = read_sheets(path)
     records: List[InvoiceRecord] = []
     read_notes: List[str] = []
+    header_only: List[str] = []
     skipped_sheets: List[str] = []
     absent_columns: List[str] = []
     voucher_fallback = False
     blank = missing_gstin = missing_date = zero_value = 0
     for sheet_name, rows in sheets:
         try:
-            header_index, mapping = detect_header_row(rows, max_header_scan)
+            first_header, header_index, mapping, headers = detect_header_block(
+                rows, max_header_scan
+            )
         except ValueError:
             skipped_sheets.append(sheet_name or "single table")
             continue
-        headers = rows[header_index]
         kept = 0
         for row_id, row in enumerate(rows[header_index + 1:], start=header_index + 2):
             record = record_from_row(
@@ -1712,12 +1895,20 @@ def load_records(
                 zero_value += 1
             records.append(record)
         label = sheet_name or "single table"
-        read_notes.append(f"{label} ({kept} row(s), header on row {header_index + 1})")
+        where = (f"row {header_index + 1}" if first_header == header_index
+                 else f"rows {first_header + 1}-{header_index + 1}")
+        entry = f"{label} ({kept} row(s), header on {where})"
+        if kept == 0:
+            header_only.append(entry)       # the portal's empty amendment sheets
+            continue
+        read_notes.append(entry)
         if "voucher_no" in mapping and mapping.get("invoice_no") == mapping["voucher_no"]:
             voucher_fallback = True
         for name in OPTIONAL_COLUMNS:
             if name not in mapping:
                 absent_columns.append(f"{label}.{name}" if sheet_name else name)
+    if not read_notes and header_only:
+        read_notes, header_only = header_only, []      # headings only: say so, do not refuse
     if not read_notes:
         raise ValueError(
             f"no usable header row found in {path} (sheets tried: "
@@ -1725,6 +1916,8 @@ def load_records(
             "invoice number and taxable value columns"
         )
     notes = [f"{source}: read {os.path.basename(file_path)} - {'; '.join(read_notes)}"]
+    if header_only:
+        notes[0] += f"; {len(header_only)} more sheet(s) with headings and no rows"
     if skipped_sheets:
         notes.append(
             f"{source}: skipped sheet(s) without reconcilable columns - "

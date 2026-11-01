@@ -4,6 +4,7 @@ import os
 import random
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import date
 
 import gstr2b_itc_workflow_hack as wf
@@ -779,6 +780,156 @@ class ActionItemTests(unittest.TestCase):
         text = " ".join(work.action_items())
         self.assertIn("Chase 1 supplier(s)", text)
         self.assertIn("Book the 1 GSTR-2B document(s) still pending", text)
+
+
+def purchase_return(row, number, booked, amount, **kwargs):
+    """A Tally debit note: its own voucher number, citing an original invoice."""
+    return books(row, GSTIN_A, "INV-ORIG", date(2026, 7, 1), amount, booked=booked,
+                 igst=amount * 0.18, voucher_no=number, document_type=DocumentType.CREDIT_NOTE,
+                 **kwargs)
+
+
+class CumulativeRegisterTests(unittest.TestCase):
+    """The books file is the whole year's register and the opening registers are cut from it."""
+
+    def test_an_earlier_purchase_return_is_not_reversed_a_second_time(self):
+        earlier = purchase_return(1, "DN/1", date(2026, 7, 5), 1000.0)
+        work = build_workpaper([], [earlier], SEP)
+        self.assertEqual(work.rows_books, [])
+        self.assertEqual(work.table4()["credit_books"], ZERO)
+        self.assertEqual(work.closing_books_deferred, [])
+        self.assertEqual(len(work.settled_earlier), 1)
+        self.assertTrue(any("dealt with in the returns of their own months" in n
+                            for n in work.notes))
+
+    def test_the_assumption_is_an_action_item_only_when_no_register_was_given(self):
+        earlier = purchase_return(1, "DN/1", date(2026, 7, 5), 1000.0)
+        without = build_workpaper([], [earlier], SEP)
+        self.assertTrue(any("no opening registers were given" in item
+                            for item in without.action_items()))
+        given = build_workpaper([], [earlier], SEP, OpeningItems(supplied=True))
+        self.assertFalse(any("no opening registers were given" in item
+                             for item in given.action_items()))
+        self.assertEqual(len(given.settled_earlier), 1)
+
+    def test_an_earlier_invoice_not_in_this_months_2b_is_not_a_new_deferral(self):
+        earlier = books(1, GSTIN_A, "INV-1", date(2026, 7, 1), 1000.0, booked=date(2026, 7, 5),
+                        igst=180.0)
+        work = build_workpaper([], [earlier], SEP)
+        self.assertEqual((work.rows_books, work.closing_books_deferred), ([], []))
+
+    def test_an_earlier_entry_that_reclaims_a_pending_2b_document_still_does(self):
+        pending = portal(1, GSTIN_A, "INV-1", date(2026, 7, 1), 1000.0, igst=180.0,
+                         sheet=OPENING_2B_SHEET)
+        earlier = books(1, GSTIN_A, "INV-1", date(2026, 7, 1), 1000.0, booked=date(2026, 8, 20),
+                        igst=180.0)
+        work = build_workpaper([], [earlier], SEP, OpeningItems(pending_2b=[pending]))
+        self.assertEqual(books_treatments(work), {"INV-1": RECLAIM_4D1})
+        self.assertEqual(work.settled_earlier, [])
+
+    def test_a_voucher_the_register_tracks_stays_open(self):
+        tracked = purchase_return(1, "DN/1", date(2026, 7, 5), 1000.0, taken_in_3b=True)
+        opening = OpeningItems(books_deferred=[replace(tracked, sheet=OPENING_BOOKS_SHEET)],
+                               supplied=True)
+        work = build_workpaper([], [tracked], SEP, opening)
+        self.assertEqual(len(work.closing_books_deferred), 1)
+        self.assertEqual(work.settled_earlier, [])
+        self.assertTrue(any("counted once" in note for note in work.notes))
+
+    def test_a_voucher_in_both_the_file_and_the_register_pairs_once_from_the_register(self):
+        file_copy = purchase_return(1, "DN/9", date(2026, 8, 5), 1000.0)
+        register_copy = replace(file_copy, sheet=OPENING_BOOKS_SHEET, taken_in_3b=True)
+        notes = [portal(row, GSTIN_A, f"CN-{row}", date(2026, 9, 3), 1000.0, igst=180.0,
+                        document_type=DocumentType.CREDIT_NOTE) for row in (1, 2)]
+        work = build_workpaper(notes, [file_copy], SEP,
+                               OpeningItems(books_deferred=[register_copy], supplied=True))
+        paired = [row for row in work.rows_2b if row.book is not None]
+        self.assertEqual(len(paired), 1)        # one voucher, one credit note - not two
+        self.assertEqual((paired[0].books_class, paired[0].treatment), (CLASS_OPENING, CN_ALREADY))
+        unpaired = [row for row in work.rows_2b if row.book is None]
+        self.assertEqual(unpaired[0].treatment, CN_REVERSE)
+
+    def test_a_tracked_voucher_has_first_claim_over_an_equal_untracked_one(self):
+        tracked = purchase_return(1, "DN/1", date(2026, 7, 1), 1000.0, taken_in_3b=True)
+        other = purchase_return(2, "DN/2", date(2026, 9, 1), 1000.0)    # nearer the credit note
+        note = portal(1, GSTIN_A, "CN-1", date(2026, 9, 3), 1000.0, igst=180.0,
+                      document_type=DocumentType.CREDIT_NOTE)
+        opening = OpeningItems(books_deferred=[replace(tracked, sheet=OPENING_BOOKS_SHEET)],
+                               supplied=True)
+        work = build_workpaper([note], [other], SEP, opening)
+        row = work.rows_2b[0]
+        self.assertEqual((row.books_class, row.treatment), (CLASS_OPENING, CN_ALREADY))
+
+
+class TrackerSheetTests(unittest.TestCase):
+    """The firm's own cumulative sheets are read in place: only what is still open comes in."""
+
+    BOOKS_TRACKER = (
+        "Date,Particulars,GSTIN/UIN,Vch Type,Vch No.,Doc No.,Doc date,Taxable,Integrated Tax,"
+        "Central Tax,State Tax,Unique GSTR 2B No,Def - Books Month (not in 2B),Reclaimed Month,"
+        "CN in Books Not in 2B But Taken in 3B\n"
+        "01-07-2026,A,27ABCDE1234F1Z5,Registered Purchase,V1,D1,01-07-2026,100,18,0,0,,"
+        "Def - Books July-26 (not in 2B),,\n"
+        "02-07-2026,B,27ABCDE1234F1Z5,Registered Purchase,V2,D2,02-07-2026,100,18,0,0,"
+        "235 Aug-26,Def - Books July-26 (not in 2B),,\n"
+        "03-07-2026,C,27ABCDE1234F1Z5,Registered Purchase,V3,D3,03-07-2026,100,18,0,0,,"
+        "Def - Books July-26 (not in 2B),Reclaimed in Aug-26,\n"
+        "04-07-2026,D,27ABCDE1234F1Z5,Registered Purchase,V4,D4,04-07-2026,100,18,0,0,"
+        "12 Jul-26,,,\n"
+        "05-07-2026,E,27ABCDE1234F1Z5,Debit Note,DN1,,,-50,-9,0,0,,,,CN taken in 3B-Jul-26\n"
+        "06-07-2026,F,27ABCDE1234F1Z5,Debit Note,DN2,,,-50,-9,0,0,240 Aug-26,,,"
+        "CN taken in 3B-Jul-26\n"
+    )
+    TWOB_TRACKER = (
+        "GSTIN of supplier,Trade/Legal name,Invoice number,Invoice type,Invoice Date,"
+        "Taxable Value,Integrated Tax,Central Tax,State/UT Tax,DEFFERRED & INELIGIABLE  MONTH,"
+        "RECLAIM MONTH\n"
+        "27ABCDE1234F1Z5,A,P1,B2B,01-07-2026,100,18,0,0,DEFFERRED FOR JULY-26,\n"
+        "27ABCDE1234F1Z5,B,P2,B2B,02-07-2026,100,18,0,0,DEFFERRED FOR JULY-26,RECLAIM AUG-26\n"
+        "27ABCDE1234F1Z5,C,P3,B2B,03-07-2026,100,18,0,0,INELIGIBLE FOR JULY-26,\n"
+        "27ABCDE1234F1Z5,D,P4,B2B,04-07-2026,100,18,0,0,,\n"
+    )
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+
+    def write(self, name, text):
+        path = os.path.join(self.temp.name, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        return path
+
+    def test_only_the_open_rows_of_a_books_tracker_come_in(self):
+        items = load_opening_items(books_deferred=self.write("books.csv", self.BOOKS_TRACKER))
+        self.assertEqual([r.voucher_no for r in items.books_deferred], ["V1", "DN1"])
+        self.assertTrue(items.supplied)
+        self.assertTrue(any("4 closed row(s) of the tracker left out - 2 still open" in n
+                            for n in items.notes))
+
+    def test_only_the_deferred_rows_not_yet_reclaimed_come_in_from_a_2b_tracker(self):
+        items = load_opening_items(pending_2b=self.write("2b.csv", self.TWOB_TRACKER))
+        self.assertEqual([r.invoice_no for r in items.pending_2b], ["P1"])
+        self.assertTrue(all(r.sheet == OPENING_2B_SHEET for r in items.pending_2b))
+
+    def test_a_plain_list_of_open_items_is_taken_whole(self):
+        plain = ("GSTIN of supplier,Invoice number,Invoice Date,Taxable Value,Integrated Tax\n"
+                 "27ABCDE1234F1Z5,P1,01-07-2026,100,18\n27ABCDE1234F1Z5,P2,02-07-2026,100,18\n")
+        items = load_opening_items(pending_2b=self.write("plain.csv", plain))
+        self.assertEqual(len(items.pending_2b), 2)
+        self.assertEqual(items.notes, [n for n in items.notes if "closed row" not in n])
+
+    def test_a_register_given_empty_is_still_a_register(self):
+        header = "GSTIN of supplier,Invoice number,Invoice Date,Taxable Value\n"
+        items = load_opening_items(pending_2b=self.write("empty.csv", header))
+        self.assertEqual((items.pending_2b, items.supplied), ([], True))
+        self.assertFalse(load_opening_items().supplied)
+
+    def test_unique_2b_numbers_are_recognised_as_the_firm_writes_them(self):
+        for text in ("235 May-26", "77JUN-26", "431 SEPT-25", " 12 Jul-26 "):
+            self.assertTrue(wf.is_2b_number(text), text)
+        for text in ("", "NOT SHOWING YET", "CN IN BOOKS NOT IN GSTR 2B", "12", "May-26"):
+            self.assertFalse(wf.is_2b_number(text), text)
 
 
 if __name__ == "__main__":

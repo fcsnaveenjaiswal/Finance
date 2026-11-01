@@ -31,7 +31,9 @@ from gstr2b_reconciliation_hack import (
     ReconStatus,
     aggregate_records,
     clean_doc_number,
+    combine_header_rows,
     demo_data,
+    detect_header_block,
     detect_header_row,
     find_duplicate_documents,
     invoice_trailing_number,
@@ -70,6 +72,16 @@ def make_record(source, row_id, gstin, invoice_no, day=1, taxable=1000.0, **kwar
     )
 
 
+def column_name(index):
+    """0 -> A, 25 -> Z, 26 -> AA: the real portal sheets run past column Z."""
+    name = ""
+    index += 1
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
+
+
 def write_xlsx(path, sheets, drop_empty_rows=False):
     """
     Write the subset of the .xlsx format the reader consumes, using shared
@@ -105,7 +117,7 @@ def write_xlsx(path, sheets, drop_empty_rows=False):
                 for column, value in enumerate(row):
                     if value is None or value == "":
                         continue
-                    ref = f"{chr(65 + column)}{row_number}"
+                    ref = f"{column_name(column)}{row_number}"
                     if isinstance(value, str):
                         cells.append(f'<c r="{ref}" t="s"><v>{strings.index(value)}</v></c>')
                     else:
@@ -813,6 +825,313 @@ class RealLayoutRecordTests(unittest.TestCase):
         self.assertTrue(parse_yes_no("Y"))
         self.assertFalse(parse_yes_no("No"))
         self.assertFalse(parse_yes_no(""))
+
+
+# The GST portal stacks its headings: a group heading ('Invoice Details', 'Tax Amount',
+# 'Original Details') sits over the sub-headings it covers, and the rest of that merged
+# cell reads as empty. These rows reproduce the layout of a real download with invented
+# suppliers and amounts. A flattened one-row version of it, which is what the first
+# tests used, hid the fact that the real file could not be read at all.
+PORTAL_BANNER = [
+    ["Goods and Services Tax  - GSTR-2B"],
+    [],
+    [],
+    ["Taxable inward supplies received from registered persons"],
+]
+PORTAL_B2B_TOP = [
+    "GSTIN of supplier", "Trade/Legal name", "Invoice Details", "", "", "", "Place of supply",
+    "Supply Attract Reverse Charge", "Taxable Value (₹)", "Tax Amount", "", "", "",
+    "GSTR-1/IFF/GSTR-5 Period", "GSTR-1/IFF/GSTR-5 Filing Date", "ITC Availability", "Reason",
+    "Applicable % of Tax Rate", "Source", "IRN", "IRN Date",
+]
+PORTAL_B2B_SUB = [
+    "", "", "Invoice number", "Invoice type", "Invoice Date", "Invoice Value(₹)", "", "", "",
+    "Integrated Tax(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Cess(₹)",
+    "", "", "", "", "", "", "", "",
+]
+PORTAL_B2B_ROWS = [
+    [GSTIN_A, "Dharam Traders", "INV/101", "B2B", "03/11/2025", 11800, "West Bengal", "No",
+     10000, 0, 900, 900, 0, "Nov'25", "11/12/2025", "Yes", "", "100%", "", "", ""],
+    [GSTIN_B, "Kiran Fabrics", "K-77", "B2B", "27/11/2025", 5250, "West Bengal", "Yes",
+     5000, 250, 0, 0, 0, "Nov'25", "06/12/2025", "No", "", "100%", "E-Invoice", "ab12",
+     "27/11/2025"],
+]
+PORTAL_CDNR_TOP = [
+    "GSTIN of supplier", "Trade/Legal name", "Credit note/Debit note details", "", "", "", "",
+    "Place of supply", "Supply Attract Reverse Charge", "Taxable Value (₹)", "Tax Amount", "",
+    "", "", "Whether ITC to be reduced (Taxpayer's Input)",
+    "Amount declared by taxpayer for ITC reduction", "", "", "", "GSTR-1/IFF/GSTR-5 Period",
+    "GSTR-1/IFF/GSTR-5 Filing Date", "ITC Availability", "Reason", "Applicable % of Tax Rate",
+    "Source", "IRN", "IRN Date",
+]
+PORTAL_CDNR_SUB = [
+    "", "", "Note number", "Note type", "Note Supply type", "Note date", "Note Value (₹)", "",
+    "", "", "Integrated Tax(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Cess(₹)", "",
+    "Integrated Tax(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Cess(₹)",
+    "", "", "", "", "", "", "", "",
+]
+PORTAL_CDNR_ROWS = [
+    [GSTIN_A, "Dharam Traders", "CN/17", "Credit Note", "Regular", "29/11/2025", 5900,
+     "West Bengal", "No", 5000, 0, 450, 450, 0, "Yes", 111, 222, 333, 0, "Nov'25",
+     "11/12/2025", "Yes", "", "100%", "", "", ""],
+]
+PORTAL_B2BA_TOP = ["Original Details", "", "Revised Details"] + [""] * 17
+PORTAL_B2BA_MID = [
+    "Invoice number", "Invoice Date", "GSTIN of supplier", "Trade/Legal name",
+    "Invoice Details", "", "", "", "Place of supply", "Supply Attract Reverse Charge",
+    "Taxable Value (₹)", "Tax Amount", "", "", "", "GSTR-1/IFF/GSTR-5 Period",
+    "GSTR-1/IFF/GSTR-5 Filing Date", "ITC Availability", "Reason", "Applicable % of Tax Rate",
+]
+PORTAL_B2BA_SUB = [
+    "", "", "", "", "Invoice number", "Invoice type", "Invoice Date", "Invoice Value(₹)", "",
+    "", "", "Integrated Tax(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Cess(₹)",
+    "", "", "", "", "",
+]
+PORTAL_B2BA_ROWS = [
+    ["OLD/9", "02/10/2025", GSTIN_B, "Kiran Fabrics", "NEW/9", "B2B", "05/11/2025", 5900,
+     "West Bengal", "No", 5000, 900, 0, 0, 0, "Nov'25", "11/12/2025", "Yes", "", "100%"],
+]
+PORTAL_READ_ME = [
+    ["Goods and Services Tax  - GSTR-2B"],
+    [],
+    [],
+    ["Financial Year", "", "2025-26"],
+    ["Tax Period", "", "November"],
+    ["GSTIN", "", GSTIN_A],
+    ["Legal Name", "", "Dharam Enterprises"],
+    ["Date of generation", "", "14/12/2025"],
+    [],
+    ["GSTR-2B Data Entry Instructions"],
+    ["Worksheet Name", "GSTR-2B Table Reference", "Field Name", "Instructions"],
+    ["B2B", "Taxable inward supplies received from registered person", "GSTIN of Supplier",
+     "GSTIN of supplier"],
+    ["", "", "Trade/Legal name", "Trade name of the supplier will be displayed"],
+    ["", "", "Invoice number", "Invoice number"],
+    ["", "", "Invoice type", "Invoice type can be derived from the following types"],
+    ["", "", "Invoice date", "Invoice date format shall be DD-MM-YYYY"],
+    ["", "", "Taxable value", "Taxable value of the supply"],
+]
+
+
+class StackedHeadingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+
+    def workbook(self, sheets):
+        path = os.path.join(self.temp.name, "gstr2b.xlsx")
+        write_xlsx(path, sheets)
+        return path
+
+    def test_a_two_row_heading_is_read_as_one(self):
+        rows = PORTAL_BANNER + [PORTAL_B2B_TOP, PORTAL_B2B_SUB] + PORTAL_B2B_ROWS
+        first, last, mapping, leaf = detect_header_block(rows)
+        self.assertEqual((first, last), (4, 5))
+        expected = {
+            "gstin": 0, "supplier_name": 1, "invoice_no": 2, "document_type": 3,
+            "invoice_date": 4, "rcm": 7, "taxable_value": 8, "igst": 9, "cgst": 10,
+            "sgst": 11, "cess": 12, "gstr1_period": 13, "gstr1_filing_date": 14,
+            "itc_available": 15, "reason": 16,
+        }
+        for name, column in expected.items():
+            self.assertEqual(mapping[name], column, name)
+        self.assertEqual(detect_header_row(rows), (5, mapping))
+        self.assertEqual(leaf[2], "Invoice number")        # the leaf heading, for repeat checks
+
+    def test_the_declared_reduction_is_not_the_document_tax(self):
+        rows = PORTAL_BANNER + [PORTAL_CDNR_TOP, PORTAL_CDNR_SUB] + PORTAL_CDNR_ROWS
+        _first, last, mapping, _leaf = detect_header_block(rows)
+        self.assertEqual(last, 5)
+        expected = {"invoice_no": 2, "document_type": 3, "invoice_date": 5, "taxable_value": 9,
+                    "igst": 10, "cgst": 11, "sgst": 12, "cess": 13}
+        for name, column in expected.items():
+            self.assertEqual(mapping[name], column, name)
+        records, _notes = load_records(
+            self.workbook([("B2B-CDNR", rows)]), SOURCE_GSTR2B)
+        self.assertEqual(len(records), 1)
+        note = records[0]
+        self.assertEqual(note.document_type, DocumentType.CREDIT_NOTE)
+        self.assertEqual((note.invoice_no, note.invoice_date), ("CN/17", date(2025, 11, 29)))
+        # the amounts declared for ITC reduction (111/222/333) are not read as tax
+        self.assertEqual((note.taxable_value, note.igst, note.cgst, note.sgst),
+                         (-5000.0, 0.0, -450.0, -450.0))
+
+    def test_an_amended_sheet_reads_the_revised_document(self):
+        rows = PORTAL_BANNER + [PORTAL_B2BA_TOP, PORTAL_B2BA_MID, PORTAL_B2BA_SUB] \
+            + PORTAL_B2BA_ROWS
+        first, last, mapping, _leaf = detect_header_block(rows)
+        self.assertEqual((first, last), (4, 6))
+        self.assertEqual((mapping["gstin"], mapping["invoice_no"], mapping["invoice_date"]),
+                         (2, 4, 6))
+        records, _notes = load_records(self.workbook([("B2BA", rows)]), SOURCE_GSTR2B)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].invoice_no, "NEW/9")          # not the original, OLD/9
+        self.assertEqual(records[0].invoice_date, date(2025, 11, 5))
+        self.assertEqual((records[0].taxable_value, records[0].igst), (5000.0, 900.0))
+
+    def test_a_whole_download_reads_every_table_and_skips_the_instructions(self):
+        b2b = PORTAL_BANNER + [PORTAL_B2B_TOP, PORTAL_B2B_SUB] + PORTAL_B2B_ROWS
+        cdnr = PORTAL_BANNER + [PORTAL_CDNR_TOP, PORTAL_CDNR_SUB] + PORTAL_CDNR_ROWS
+        empty = PORTAL_BANNER + [PORTAL_B2BA_TOP, PORTAL_B2BA_MID, PORTAL_B2BA_SUB]
+        path = self.workbook([("Read me", PORTAL_READ_ME), ("B2B", b2b), ("B2BA", empty),
+                              ("B2B-CDNR", cdnr)])
+        records, notes = load_records(path, SOURCE_GSTR2B)
+        self.assertEqual([(r.sheet, r.invoice_no) for r in records],
+                         [("B2B", "INV/101"), ("B2B", "K-77"), ("B2B-CDNR", "CN/17")])
+        text = " ".join(notes)
+        self.assertIn("B2B (2 row(s), header on rows 5-6)", text)
+        self.assertIn("1 more sheet(s) with headings and no rows", text)
+        self.assertIn("skipped sheet(s) without reconcilable columns - Read me", text)
+        self.assertEqual(records[1].rcm, True)
+        self.assertFalse(records[1].itc_available)
+        total_igst = sum(r.igst for r in records)
+        self.assertEqual(round(total_igst, 2), 250.0)
+
+    def test_running_text_is_not_a_heading(self):
+        with self.assertRaises(ValueError):
+            detect_header_block(PORTAL_READ_ME)
+
+    def test_a_repeated_stacked_heading_is_not_a_document(self):
+        rows = (PORTAL_BANNER + [PORTAL_B2B_TOP, PORTAL_B2B_SUB] + PORTAL_B2B_ROWS
+                + [PORTAL_B2B_TOP, PORTAL_B2B_SUB] + PORTAL_B2B_ROWS)
+        records, _notes = load_records(self.workbook([("B2B", rows)]), SOURCE_GSTR2B)
+        self.assertEqual(len(records), 4)
+
+    def test_a_plain_header_is_not_folded_into_the_first_data_row(self):
+        rows = [
+            ["GSTIN of supplier", "Invoice number", "Invoice Date", "Taxable Value (₹)"],
+            [GSTIN_A, "INV-1", "01-06-2025", "1000"],
+            [GSTIN_A, "INV-2", "02-06-2025", "2000"],
+        ]
+        first, last, mapping, _leaf = detect_header_block(rows)
+        self.assertEqual((first, last), (0, 0))
+        self.assertEqual(mapping["invoice_no"], 1)
+
+    def test_combining_rows_carries_a_group_over_its_merged_cells(self):
+        labels = combine_header_rows([["A", "Group", "", "", "Z"], ["", "x", "y", "z", ""]])
+        self.assertEqual(labels, ["A", "Group x", "Group y", "Group z", "Z"])
+        self.assertEqual(combine_header_rows([["Only", "One"]]), ["Only", "One"])
+        self.assertEqual(combine_header_rows([]), [])
+
+
+TALLY_VOUCHER_REGISTER = [
+    "Date", "Particulars", "GSTIN/UIN", "Vch Type", "Vch No.", "Invoice No", "Invoice",
+    "Taxable", "IGST", "Central Tax", "State Tax",
+]
+
+
+class RealExportQuirkTests(unittest.TestCase):
+    """Things a real Tally voucher register does that a tidy sample never does."""
+
+    def test_a_bare_invoice_header_beside_invoice_no_is_the_invoice_date(self):
+        mapping = map_columns(TALLY_VOUCHER_REGISTER)
+        self.assertEqual(mapping["invoice_no"], 5)
+        self.assertEqual(mapping["invoice_date"], 6)        # 'Invoice' is the supplier's date
+        self.assertEqual(mapping["booking_date"], 0)        # 'Date' is the voucher date
+        self.assertEqual(mapping["voucher_no"], 4)
+
+    def test_a_bare_invoice_header_is_not_a_date_unless_it_sits_beside_the_number(self):
+        elsewhere = ["Date", "Invoice", "Particulars", "GSTIN/UIN", "Invoice No", "Taxable"]
+        self.assertNotEqual(map_columns(elsewhere).get("invoice_date"), 1)
+        explicit = ["Date", "Invoice No", "Invoice", "Invoice Date", "GSTIN", "Taxable"]
+        self.assertEqual(map_columns(explicit)["invoice_date"], 3)
+
+    def test_the_voucher_date_no_longer_stands_in_for_the_invoice_date(self):
+        row = ["10-04-2025", "Dharam Traders", GSTIN_A, "Registered Purchase", "V/1", "INV-1",
+               "01-04-2025", "1000", "0", "90", "90"]
+        record = record_from_row(row, map_columns(TALLY_VOUCHER_REGISTER), SOURCE_BOOKS, 8,
+                                 books=True)
+        self.assertEqual(record.invoice_date, date(2025, 4, 1))
+        self.assertEqual(record.booking_date, date(2025, 4, 10))
+
+    def test_a_financial_year_stamp_is_not_the_trailing_number(self):
+        for number, expected in (
+            ("ABC/25-26/54", "54"), ("0054/25-26", "54"), ("XYZ/000130/25-26", "130"),
+            ("2025-26/7", "7"), ("INV/2025-2026/12", "12"), ("QRS/054/24-25", "54"),
+            ("INV-12", "12"), ("A5/17", "17"),
+        ):
+            self.assertEqual(invoice_trailing_number(number), expected, number)
+
+    def test_a_pair_of_numbers_that_is_not_a_financial_year_is_left_alone(self):
+        self.assertEqual(invoice_trailing_number("12-13"), "13")        # a serial, not a year
+        self.assertEqual(invoice_trailing_number("25-26"), "26")        # nothing else to use
+        self.assertEqual(invoice_trailing_number("9925-26"), "26")      # digits before it
+
+    def test_the_numbers_of_the_two_sides_now_meet_on_the_serial(self):
+        portal = make_record(SOURCE_GSTR2B, 1, GSTIN_A, "ABC/25-26/54", day=18, taxable=49252.5)
+        book = make_record(SOURCE_BOOKS, 1, GSTIN_A, "0054/25-26", day=18, taxable=49252.5)
+        result = GSTR2BReconciler().reconcile([portal], [book])
+        self.assertEqual(len(result.matched), 1)
+        self.assertIs(result.matched[0].basis, MatchBasis.INVOICE_TRAILING_NUMBER)
+
+    def test_escaped_line_breaks_in_a_cell_are_decoded(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "books.xlsx")
+            write_xlsx(path, [("Sheet1", [
+                ["GSTIN of supplier", "Invoice number", "Invoice Date", "Taxable Value"],
+                [GSTIN_A, "MAP0305_x000D_", "01-06-2025", 1000],
+                [GSTIN_A, "A_x005F_x000D_B", "02-06-2025", 2000],
+            ])])
+            records, _notes = load_records(path, SOURCE_BOOKS)
+        self.assertEqual([r.invoice_no for r in records], ["MAP0305", "A_x000D_B"])
+
+    def test_a_purchase_return_citing_the_original_invoice_pairs_on_supplier_and_value(self):
+        credit_note = make_record(SOURCE_GSTR2B, 1, GSTIN_A, "CN/17", day=20, taxable=5000.0,
+                                  igst=250.0, document_type=DocumentType.CREDIT_NOTE)
+        debit_note = make_record(SOURCE_BOOKS, 1, GSTIN_A, "INV-9", day=2, taxable=5000.0,
+                                 igst=250.0, voucher_no="DN/1",
+                                 document_type=DocumentType.CREDIT_NOTE)
+        result = GSTR2BReconciler().reconcile([credit_note], [debit_note])
+        self.assertEqual(len(result.matched), 1)
+        pair = result.matched[0]
+        self.assertIs(pair.basis, MatchBasis.SUPPLIER_VALUE_ONLY)
+        self.assertIn(FLAG_NO_DOC_REFERENCE, pair.flags)
+
+    def test_an_invoice_with_a_number_of_its_own_is_never_paired_on_value_alone(self):
+        theirs = make_record(SOURCE_GSTR2B, 1, GSTIN_A, "A-1", day=1, taxable=5000.0, igst=250.0)
+        ours = make_record(SOURCE_BOOKS, 1, GSTIN_A, "B-9", day=20, taxable=5000.0, igst=250.0)
+        result = GSTR2BReconciler().reconcile([theirs], [ours])
+        self.assertEqual((len(result.matched), len(result.only_in_gstr2b),
+                          len(result.only_in_books)), (0, 1, 1))
+
+    def test_in_the_value_only_pass_the_closest_value_beats_the_closest_date(self):
+        note = make_record(SOURCE_GSTR2B, 1, GSTIN_A, "CN/1", day=20, taxable=5000.0, igst=250.0,
+                           document_type=DocumentType.CREDIT_NOTE)
+        near_date = make_record(SOURCE_BOOKS, 1, GSTIN_A, "INV-1", day=14, taxable=5060.0,
+                                igst=253.0, voucher_no="DN/1",
+                                document_type=DocumentType.CREDIT_NOTE)
+        exact = make_record(SOURCE_BOOKS, 2, GSTIN_A, "INV-2", day=2, taxable=5000.0,
+                            igst=250.0, voucher_no="DN/2", document_type=DocumentType.CREDIT_NOTE)
+        result = GSTR2BReconciler().reconcile([note], [near_date, exact])
+        self.assertEqual(result.matched[0].books.voucher_no, "DN/2")
+
+    def test_returns_against_one_invoice_are_separate_documents_not_duplicates(self):
+        returns = [
+            make_record(SOURCE_BOOKS, row, GSTIN_A, "INV-9", day=2, taxable=amount,
+                        igst=amount / 20, voucher_no=f"DN/{row}",
+                        document_type=DocumentType.CREDIT_NOTE)
+            for row, amount in ((1, 4385.0), (2, 11965.0))
+        ]
+        self.assertEqual(len(aggregate_records(returns)), 2)
+        self.assertEqual(find_duplicate_documents(aggregate_records(returns)), [])
+        invoices = [make_record(SOURCE_BOOKS, row, GSTIN_A, "INV-9", day=2, taxable=100.0)
+                    for row in (1, 2)]
+        self.assertEqual(len(aggregate_records(invoices)), 1)       # ledger lines of one bill
+
+    def test_an_entry_given_priority_is_assigned_first_whatever_the_date(self):
+        note = make_record(SOURCE_GSTR2B, 1, GSTIN_A, "CN/1", day=20, taxable=5000.0, igst=250.0,
+                           document_type=DocumentType.CREDIT_NOTE)
+        plain = make_record(SOURCE_BOOKS, 1, GSTIN_A, "INV-1", day=14, taxable=5000.0, igst=250.0,
+                            voucher_no="DN/1", document_type=DocumentType.CREDIT_NOTE)
+        tracked = make_record(SOURCE_BOOKS, 2, GSTIN_A, "INV-2", day=2, taxable=5000.0, igst=250.0,
+                              voucher_no="DN/2", document_type=DocumentType.CREDIT_NOTE,
+                              sheet="register")
+        default = GSTR2BReconciler().reconcile([note], [plain, tracked])
+        self.assertEqual(default.matched[0].books.voucher_no, "DN/1")
+        prioritised = GSTR2BReconciler(
+            book_priority=lambda b: 0 if b.sheet == "register" else 1,
+        ).reconcile([note], [plain, tracked])
+        self.assertEqual(prioritised.matched[0].books.voucher_no, "DN/2")
 
 
 class NumberLessDocumentTests(unittest.TestCase):

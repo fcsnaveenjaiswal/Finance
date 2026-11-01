@@ -37,6 +37,7 @@ import os
 import re
 import sys
 import tempfile
+import zipfile
 from datetime import date, datetime
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -90,6 +91,7 @@ from gstr2b_reconciliation_hack import (
     MatchBasis,
     ReconStatus,
     load_records,
+    read_xlsx_sheets,
     split_file_spec,
 )
 from xlsx_writer_hack import (
@@ -1053,14 +1055,16 @@ def write_reclaimed(book: Workbook, work: Workpaper) -> None:
         sheet.formula(r, 14, f"SUM(K{e}:N{e})", cached=row.basis.total, style=MONEY_BOLD)
         sheet.write(r, 15, "", INPUT_TEXT)
         totals[4] += row.basis.total
-    total_row = FIRST_DATA_ROW + len(rows)
+    # With nothing reclaimed one blank row is still kept, so the totals sum a range that
+    # does not contain the totals themselves (a circular reference).
+    total_row = FIRST_DATA_ROW + max(1, len(rows))
     sheet.write(total_row, 0, "Total reclaimed - agrees to Table 4(D)(1)", Style(
         font_size=9, bold=True, border="total"))
     for col in range(1, 10):
         sheet.write(total_row, col, None, MONEY_TOTAL)
     for offset in range(5):
         letter = col_letter(10 + offset)
-        top, bottom = FIRST_DATA_ROW + 1, max(FIRST_DATA_ROW + 1, total_row)
+        top, bottom = FIRST_DATA_ROW + 1, total_row
         sheet.formula(total_row, 10 + offset, f"SUM({letter}{top}:{letter}{bottom})",
                       cached=round(totals[offset], 2), style=MONEY_TOTAL)
     sheet.freeze_panes(FIRST_DATA_ROW, 3)
@@ -1136,7 +1140,9 @@ def write_carry_forward_sheet(book: Workbook, work: Workpaper) -> CarryLayout:
             sheet.write(r, 18, "Yes" if item.taken_in_3b else "", TEXT.but(halign="center"))
             sheet.write(r, 19, item.note, WRAP)
             r += 1
-        layout.last[key] = max(layout.first[key], r)
+        if not ordered:
+            r += 1      # keep one blank row: the totals must not sum a range that holds them
+        layout.last[key] = r
         sheet.write(r, 0, f"Total - {len(ordered)} document(s)", Style(font_size=9, bold=True,
                                                                        border="total"))
         for col in range(1, 10):
@@ -1429,15 +1435,89 @@ def text_summary(work: Workpaper) -> str:
 # --------------------------------------------------------------------------- CLI
 
 _PORTAL_NAME = re.compile(r"GSTR2B[_\- ]+([0-9A-Z]{15})[_\- ]+(\d{2})(\d{4})", re.I)
+_PORTAL_NAME_MONTH_FIRST = re.compile(
+    r"(?<!\d)(\d{2})(\d{4})[_\- ]+([0-9A-Z]{15})[_\- ]+GSTR2B", re.I
+)
 
 
 def infer_from_filename(spec: str) -> Tuple[str, Optional[Period]]:
-    """The portal names its download GSTR2B_<GSTIN>_<MMYYYY>.xlsx: read GSTIN and month from it."""
+    """
+    Read the GSTIN and the month from the name the portal gives its download:
+    GSTR2B_<GSTIN>_<MMYYYY>.xlsx, or <MMYYYY>_<GSTIN>_GSTR2B_<DDMMYYYY>.xlsx (month
+    first, followed by the day it was generated).
+    """
     path, _sheet = split_file_spec(spec)
-    found = _PORTAL_NAME.search(os.path.basename(path))
-    if not found:
-        return "", None
-    return found.group(1).upper(), parse_period(f"{found.group(2)}{found.group(3)}")
+    name = os.path.basename(path)
+    found = _PORTAL_NAME.search(name)
+    if found:
+        return found.group(1).upper(), parse_period(f"{found.group(2)}{found.group(3)}")
+    found = _PORTAL_NAME_MONTH_FIRST.search(name)
+    if found:
+        return found.group(3).upper(), parse_period(f"{found.group(1)}{found.group(2)}")
+    return "", None
+
+
+_PORTAL_LABELS = {
+    "financial year": "financial_year", "tax period": "tax_period", "gstin": "gstin",
+    "legal name": "legal_name", "trade name": "trade_name",
+}
+
+
+def read_portal_details(spec: str) -> Dict[str, str]:
+    """
+    What the portal prints at the top of the 'Read me' sheet of a GSTR-2B download:
+    financial year, tax period, GSTIN and legal name. Empty when the file is not a
+    workbook or has no such sheet - the file name and --period then have to do.
+    """
+    path, _sheet = split_file_spec(spec)
+    if not path.lower().endswith(".xlsx"):
+        return {}
+    try:
+        sheets = read_xlsx_sheets(path)
+    except (ValueError, OSError, zipfile.BadZipFile):
+        return {}                               # the real read reports the problem
+    for name, rows in sheets:
+        if "read me" not in name.lower():
+            continue
+        found: Dict[str, str] = {}
+        for row in rows[:30]:
+            cells = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
+            if len(cells) >= 2:
+                key = _PORTAL_LABELS.get(re.sub(r"\s*\(.*?\)", "", cells[0]).strip().lower())
+                if key and key not in found:
+                    found[key] = cells[1]
+        return found
+    return {}
+
+
+def period_from_details(details: Dict[str, str]) -> Optional[Period]:
+    """The return month from 'Financial Year 2025-26' and 'Tax Period November'."""
+    month = parse_period(f"{details.get('tax_period', '')} 2000")
+    start = re.match(r"\s*(\d{4})", details.get("financial_year", ""))
+    if month is None or start is None:
+        return None
+    year = int(start.group(1)) + (0 if month.month >= 4 else 1)
+    try:
+        return Period(year, month.month)
+    except ValueError:
+        return None
+
+
+def check_against_portal(period: Period, gstin: str, details: Dict[str, str]) -> List[str]:
+    """Notes for a file whose own header disagrees with the month or GSTIN being run."""
+    notes = []
+    stated = period_from_details(details)
+    if stated is not None and stated != period:
+        notes.append(
+            f"GSTR-2B: the file's own header says {stated.long_label}, but this run is for "
+            f"{period.long_label} - check that it is the right month's download."
+        )
+    theirs = details.get("gstin", "").strip().upper()
+    if gstin and theirs and gstin.upper() != theirs:
+        notes.append(
+            f"GSTR-2B: the file's own header names GSTIN {theirs}, not {gstin.upper()}."
+        )
+    return notes
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -1496,10 +1576,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     try:
         gstin_hint, period_hint = infer_from_filename(args.gstr2b)
-        period = require_period(args.period) if args.period else period_hint
+        details = read_portal_details(args.gstr2b)
+        period = (require_period(args.period) if args.period
+                  else period_hint or period_from_details(details))
         if period is None:
             raise ValueError("say which month this is with --period, e.g. --period 2026-09")
+        stated_gstin = args.gstin or gstin_hint
         gstr2b, notes_2b = load_records(args.gstr2b, SOURCE_GSTR2B, side="portal")
+        notes_2b += check_against_portal(period, stated_gstin, details)
         books, notes_books = load_records(args.books, SOURCE_BOOKS, side="books")
         opening = load_opening_items(
             _opening_path(args.opening_books_deferred, args.opening_dir, CARRY_BOOKS_FILE),
@@ -1508,8 +1592,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             gstr2b, books, period, opening,
             reconciler=GSTR2BReconciler(args.date_tolerance, args.value_tolerance,
                                         args.tax_tolerance),
-            cn_policy=args.cn_policy, client=args.client,
-            gstin=(args.gstin or gstin_hint).upper(), read_notes=notes_2b + notes_books)
+            cn_policy=args.cn_policy, client=args.client or details.get("legal_name", ""),
+            gstin=(stated_gstin or details.get("gstin", "")).upper(),
+            read_notes=notes_2b + notes_books)
         outdir = args.outdir or f"gstr2b_{period.label}"
         stamp = "" if args.no_timestamp else datetime.now().strftime("%d-%b-%Y %H:%M")
         files = {"gstr2b": os.path.basename(split_file_spec(args.gstr2b)[0]),
