@@ -46,6 +46,7 @@ from gstr2b_reconciliation_hack import (
     aggregate_records,
     find_duplicate_documents,
     load_records,
+    normalise_invoice_no,
     split_reverse_charge,
 )
 
@@ -315,6 +316,7 @@ class OpeningItems:
     books_deferred: List[InvoiceRecord] = field(default_factory=list)
     pending_2b: List[InvoiceRecord] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    supplied: bool = False       # an opening register was given (even an empty one)
 
 
 def _tag_opening(records: Sequence[InvoiceRecord], sheet: str) -> List[InvoiceRecord]:
@@ -323,21 +325,73 @@ def _tag_opening(records: Sequence[InvoiceRecord], sheet: str) -> List[InvoiceRe
     return list(records)
 
 
+_UNIQUE_2B_NUMBER = re.compile(r"^\s*\d+\s*[A-Za-z]{3,9}[-\s']*\d{2,4}\s*$")
+
+
+def is_2b_number(text: str) -> bool:
+    """A 'unique GSTR-2B number' as the firm writes it: serial and month, '235 May-26'."""
+    return bool(_UNIQUE_2B_NUMBER.match(text or ""))
+
+
+def _still_open(record: InvoiceRecord, books: bool) -> bool:
+    """
+    Whether a row of a tracker sheet is still open.
+
+    A cumulative tracker keeps every row of the year and marks the closed ones: a
+    GSTR-2B line carries the month it was reclaimed; a books entry carries the
+    GSTR-2B number it was matched to, or its reclaim month. What is left is open
+    only if it was deferred (or, on the books side, a purchase return already
+    reversed and waiting for the supplier's credit note). Deferrals marked
+    'ineligible' never come back.
+    """
+    if record.reclaimed.strip():
+        return False
+    if books:
+        return not is_2b_number(record.ref) and bool(record.origin_period.strip()
+                                                     or record.taken_in_3b)
+    label = record.origin_period.strip().upper()
+    return bool(label) and not label.startswith("INELIG")
+
+
+def _open_rows(records: List[InvoiceRecord], books: bool) -> Tuple[List[InvoiceRecord], int]:
+    """
+    Keep the open rows of a tracker sheet; leave a plain list of open items alone.
+
+    A sheet is a tracker when it records closure at all - a reclaim-month column or
+    GSTR-2B numbers linking the books to the portal. The CSVs this tool writes carry
+    neither, and every row of them is open.
+    """
+    tracker = any(r.reclaimed.strip() or is_2b_number(r.ref) for r in records)
+    if not tracker:
+        return records, 0
+    kept = [r for r in records if _still_open(r, books)]
+    return kept, len(records) - len(kept)
+
+
 def load_opening_items(books_deferred: str = "", pending_2b: str = "") -> OpeningItems:
     """
     Read the opening registers. Each is a CSV or workbook (optionally 'file#Sheet')
     in the layout this tool writes at the end of a run, or the firm's own
-    tracker sheets: the same header aliases apply as for the main files.
+    tracker sheets, read in place: the same header aliases apply as for the main
+    files, and in a tracker that also holds the rows already closed only the open
+    ones are brought forward.
     """
-    items = OpeningItems()
-    if books_deferred:
-        records, notes = load_records(books_deferred, SOURCE_BOOKS, side="books")
-        items.books_deferred = _tag_opening(records, OPENING_BOOKS_SHEET)
-        items.notes += [f"Opening books deferred - {note}" for note in notes]
-    if pending_2b:
-        records, notes = load_records(pending_2b, SOURCE_GSTR2B, side="portal")
-        items.pending_2b = _tag_opening(records, OPENING_2B_SHEET)
-        items.notes += [f"Opening 2B pending - {note}" for note in notes]
+    items = OpeningItems(supplied=bool(books_deferred or pending_2b))
+    for path, source, side, books in ((books_deferred, SOURCE_BOOKS, "books", True),
+                                      (pending_2b, SOURCE_GSTR2B, "portal", False)):
+        if not path:
+            continue
+        label = "Opening books deferred" if books else "Opening 2B pending"
+        records, notes = load_records(path, source, side=side)
+        records, closed = _open_rows(records, books)
+        if closed:
+            notes.append(f"{closed} closed row(s) of the tracker left out - {len(records)} "
+                         f"still open")
+        if books:
+            items.books_deferred = _tag_opening(records, OPENING_BOOKS_SHEET)
+        else:
+            items.pending_2b = _tag_opening(records, OPENING_2B_SHEET)
+        items.notes += [f"{label} - {note}" for note in notes]
     return items
 
 
@@ -500,6 +554,8 @@ class Workpaper:
     opening_pending_2b: List[InvoiceRecord] = field(default_factory=list)
     rcm_2b: List[InvoiceRecord] = field(default_factory=list)
     rcm_books: List[InvoiceRecord] = field(default_factory=list)
+    settled_earlier: List[InvoiceRecord] = field(default_factory=list)
+    opening_supplied: bool = False
     notes: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
@@ -683,6 +739,14 @@ class Workpaper:
                 f"Rs.{pending.total:,.2f} was reversed under 4(B)(2) and is reclaimed under "
                 f"4(D)(1) once they are in the books."
             )
+        if self.settled_earlier and not self.opening_supplied:
+            items.append(
+                f"{len(self.settled_earlier)} books entr"
+                f"{'y' if len(self.settled_earlier) == 1 else 'ies'} dated before "
+                f"{self.period.long_label} were taken as dealt with in earlier returns because no "
+                f"opening registers were given - list any that is still unclaimed in the opening "
+                f"books-deferred register."
+            )
         late = [r for r in self.rows_2b if CLAIM_PM == r.treatment and r.books_class == CLASS_PM]
         if late:
             items.append(
@@ -742,6 +806,43 @@ def _ref_books(record: InvoiceRecord) -> str:
     return record.voucher_no or record.invoice_no or f"row {record.row_id}"
 
 
+def _voucher_identity(record: InvoiceRecord) -> Optional[Tuple[str, str, str, float, float]]:
+    """
+    What makes two books rows the same voucher: supplier, voucher (or supplier document)
+    number, sign and amounts. None for a row with no number at all, which cannot be told
+    apart from its neighbours.
+    """
+    number = normalise_invoice_no(record.voucher_no or record.invoice_no)
+    if not number or not record.gstin_key:
+        return None
+    return (record.gstin_key, record.sign_class, number, round(record.taxable_value, 2),
+            round(record.total_tax, 2))
+
+
+def _without_carried_vouchers(
+    file_books: Sequence[InvoiceRecord],
+    carried: Sequence[InvoiceRecord],
+) -> Tuple[List[InvoiceRecord], int]:
+    """
+    Drop from the books file the vouchers the opening register already holds.
+
+    A register kept for the whole year contains its own deferred vouchers, and the
+    opening register is cut from it. Left in twice, one voucher could pair with two
+    different GSTR-2B documents - and the copy that knows it was already reversed
+    (the register's) must be the one that counts.
+    """
+    held = {key for key in map(_voucher_identity, aggregate_records(carried)) if key}
+    repeated = []
+    for doc in aggregate_records(file_books):
+        key = _voucher_identity(doc)
+        if key is not None and key in held:
+            repeated.append(doc)
+    if not repeated:
+        return list(file_books), 0
+    drop = {(doc.sheet, row) for doc in repeated for row in doc.source_rows}
+    return [b for b in file_books if (b.sheet, b.row_id) not in drop], len(repeated)
+
+
 def build_workpaper(
     gstr2b_records: Sequence[InvoiceRecord],
     book_records: Sequence[InvoiceRecord],
@@ -764,6 +865,13 @@ def build_workpaper(
         raise ValueError(f"cn_policy must be one of {CN_POLICIES}")
     opening = opening or OpeningItems()
     reconciler = reconciler or GSTR2BReconciler()
+    if reconciler.book_priority is None:
+        # A voucher the register already tracks as waiting for its credit note has first
+        # claim on a GSTR-2B document; an equal-value voucher that is not tracked comes after.
+        reconciler = GSTR2BReconciler(
+            reconciler.date_tolerance_days, reconciler.taxable_tolerance,
+            reconciler.tax_tolerance,
+            book_priority=lambda book: 0 if book.sheet == OPENING_BOOKS_SHEET else 1)
     work = Workpaper(
         period=period, client=client, gstin=gstin, cn_policy=cn_policy,
         date_tolerance_days=reconciler.date_tolerance_days,
@@ -778,6 +886,12 @@ def build_workpaper(
     file_books, work.rcm_books, rcm_notes_books = split_reverse_charge(book_records, SOURCE_BOOKS)
     work.notes += rcm_notes_2b + rcm_notes_books
 
+    file_books, repeated = _without_carried_vouchers(file_books, opening.books_deferred)
+    if repeated:
+        work.notes.append(
+            f"BOOKS: {repeated} voucher(s) in the books file are also in the opening "
+            f"books-deferred register; each is counted once, from the register."
+        )
     dated = any(record.booking_date for record in file_books)
     if file_books and not dated:
         work.notes.append(
@@ -821,10 +935,29 @@ def build_workpaper(
             continue                              # still open: carried forward below
         cls = books_class(book, period, dated)
         pending = reclaim_of.get(_source_key(book))
+        if cls == CLASS_PM and pending is None:
+            # Booked in an earlier month, not in this month's GSTR-2B, reclaiming nothing and
+            # not in the opening register: it was dealt with in its own month's return. (A
+            # register kept for the whole year is full of these; counting them again would
+            # reverse every earlier purchase return a second time.)
+            work.settled_earlier.append(book)
+            continue
         treatment, notes = _treatment_books(book, cls, pending, cn_policy)
         work.rows_books.append(RowBooks(_ref_books(book), book, cls, treatment, pending, notes))
     work.rows_books.sort(key=lambda r: (r.doc.gstin_key, r.doc.booking_date or date.min,
                                         r.doc.sheet, r.doc.row_id))
+    work.opening_supplied = opening.supplied
+    if work.settled_earlier:
+        returns = sum(1 for b in work.settled_earlier if _credit_like(b))
+        net = sum_tax(Tax.of(b) for b in work.settled_earlier).total
+        count = len(work.settled_earlier)
+        work.notes.append(
+            f"BOOKS: {count} entr{'y' if count == 1 else 'ies'}"
+            f" dated before {period.long_label} ({returns} of them purchase returns, net ITC "
+            f"Rs.{net:,.2f}) are not in this GSTR-2B, reclaim nothing and are not in the opening "
+            f"books-deferred register: they are taken as dealt with in the returns of their own "
+            f"months and left out of this workpaper."
+        )
 
     # 3. closing registers
     still_open_books = [b for b in leftovers if b.sheet == OPENING_BOOKS_SHEET]
