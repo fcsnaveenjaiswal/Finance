@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import date
 from xml.etree import ElementTree as ET
 
 import gstr2b_itc_workflow_hack as wf
@@ -31,6 +32,18 @@ def demo_work():
     two_b, books, opening = wf._demo_records()
     return build_workpaper(two_b, books, SEP, opening, client="Demo Traders",
                            gstin="19AAAAA0000A1Z5")
+
+
+def wf_portal(row, gstin, number_, taxable):
+    return wf.InvoiceRecord(source="GSTR2B", row_id=row, serial=row, gstin=gstin,
+                            invoice_no=number_, invoice_date=date(2026, 9, 16),
+                            taxable_value=taxable, cgst=3712.54, sgst=3712.54)
+
+
+def wf_books(row, gstin, number_, taxable):
+    return wf.InvoiceRecord(source="BOOKS", row_id=row, gstin=gstin, invoice_no=number_,
+                            invoice_date=date(2026, 9, 16), booking_date=date(2026, 9, 17),
+                            taxable_value=taxable, cgst=3712.54, sgst=3712.54)
 
 
 def number(text):
@@ -239,6 +252,24 @@ class DetailSheetTests(WorkbookFixture):
         self.assertEqual(rows[0][0], "5 Sep-26")
         self.assertIn("NO_DOC_REFERENCE", rows[0][13])
         self.assertIn("confirm it is the same document", rows[0][14])
+
+    def test_the_differences_sheet_advises_on_a_bill_booked_under_the_wrong_gstin(self):
+        theirs = wf_portal(1, "19AAAAA1111A1Z1", "NRK/00731/26-27", 41250.40)
+        ours = wf_books(1, "29XYZAB5678C1Z2", "00731/26-27", 41250.40)
+        work = build_workpaper([theirs], [ours], SEP)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "wrong.xlsx")
+            wp.build_workbook(work).save(path)
+            sheets = dict(read_xlsx_sheets(path))
+        rows = [r for r in sheets[wp.SHEET_DIFF][wp.FIRST_DATA_ROW:] if r and r[0]]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("GSTIN_MISMATCH", rows[0][13])
+        self.assertIn("correct the supplier in the books", rows[0][14])
+        header = sheets[wp.SHEET_2B][wp.HEAD_ROW]
+        detail = [r for r in sheets[wp.SHEET_2B][wp.FIRST_DATA_ROW:] if r and r[0]]
+        self.assertEqual([r[header.index("Matched on")] for r in detail],
+                         ["Number, date and amounts (GSTIN differs)"])
+        self.assertEqual([r[header.index("TREATMENT")] for r in detail], ["CLAIM"])
 
     def test_reclaimed_sheet_agrees_to_table_4d1(self):
         rows = self.sheets[wp.SHEET_RECLAIM][wp.FIRST_DATA_ROW:]

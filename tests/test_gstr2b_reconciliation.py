@@ -11,6 +11,7 @@ from unittest import mock
 
 import gstr2b_reconciliation_hack as reco
 from gstr2b_reconciliation_hack import (
+    FLAG_GSTIN_MISMATCH,
     FLAG_INVOICE_DATE_DIFF,
     FLAG_INVOICE_NO_FORMAT_DIFF,
     FLAG_INVOICE_NO_MISMATCH,
@@ -57,6 +58,7 @@ from gstr2b_reconciliation_hack import (
 
 GSTIN_A = "27AAFCD1234A1Z5"
 GSTIN_B = "29XYZAB5678C1Z2"
+GSTIN_C = "24CCCCC3333C1Z3"
 
 
 def make_record(source, row_id, gstin, invoice_no, day=1, taxable=1000.0, **kwargs):
@@ -1018,6 +1020,84 @@ TALLY_VOUCHER_REGISTER = [
     "Date", "Particulars", "GSTIN/UIN", "Vch Type", "Vch No.", "Invoice No", "Invoice",
     "Taxable", "IGST", "Central Tax", "State Tax",
 ]
+
+
+class WrongGstinTests(unittest.TestCase):
+    """A bill booked under another party's GSTIN: paired last, on exact evidence, and flagged."""
+
+    @staticmethod
+    def pair_of(portal_gstin="19AAAAA1111A1Z1", book_gstin="29XYZAB5678C1Z2", **book_changes):
+        portal = make_record(SOURCE_GSTR2B, 1, portal_gstin, "NRK/00731/25-26", day=16,
+                             taxable=41250.40, cgst=3712.54, sgst=3712.54)
+        fields = dict(row_id=1, gstin=book_gstin, invoice_no="00731/25-26", day=16,
+                      taxable=41250.40, cgst=3712.54, sgst=3712.54)
+        fields.update(book_changes)
+        book = make_record(SOURCE_BOOKS, fields.pop("row_id"), fields.pop("gstin"),
+                           fields.pop("invoice_no"), **fields)
+        return GSTR2BReconciler().reconcile([portal], [book])
+
+    def test_the_same_serial_date_and_amounts_pair_across_suppliers_and_are_flagged(self):
+        result = self.pair_of()
+        self.assertEqual(len(result.matched), 1)
+        pair = result.matched[0]
+        self.assertIs(pair.basis, MatchBasis.GSTIN_MISMATCH)
+        self.assertIn(FLAG_GSTIN_MISMATCH, pair.flags)
+        self.assertIs(pair.status, ReconStatus.MATCHED_WITH_DIFFERENCE)
+        self.assertEqual((result.only_in_gstr2b, result.only_in_books), ([], []))
+        self.assertIn(FLAG_GSTIN_MISMATCH, reco.DIFFERENCE_FLAGS)
+
+    def test_anything_short_of_exact_is_left_unpaired(self):
+        cases = {
+            "the date is a day out": dict(day=17),
+            "the taxable value is a rupee out": dict(taxable=41251.40),
+            "the taxable value is a paisa out": dict(taxable=41250.41),
+            "the tax is a paisa out": dict(cgst=3712.55),
+            "the serial differs": dict(invoice_no="00732/25-26"),
+            "one side is a credit note": dict(document_type=DocumentType.CREDIT_NOTE),
+            "the books carry no date": dict(day=0),
+            "the books carry no GSTIN": dict(gstin=""),
+            "the books carry no number": dict(invoice_no=""),
+        }
+        for name, changes in cases.items():
+            with self.subTest(name):
+                result = self.pair_of(**changes)
+                self.assertEqual(result.matched, [], name)
+
+    def test_a_normal_match_always_comes_first(self):
+        portal = make_record(SOURCE_GSTR2B, 1, GSTIN_A, "INV-1", day=5, taxable=1000.0, igst=180.0)
+        right = make_record(SOURCE_BOOKS, 1, GSTIN_A, "INV-1", day=5, taxable=1000.0, igst=180.0)
+        wrong = make_record(SOURCE_BOOKS, 2, GSTIN_B, "INV-1", day=5, taxable=1000.0, igst=180.0)
+        result = GSTR2BReconciler().reconcile([portal], [wrong, right])
+        self.assertEqual(len(result.matched), 1)
+        self.assertEqual((result.matched[0].books.gstin_key, result.matched[0].basis),
+                         (GSTIN_A, MatchBasis.EXACT_INVOICE_NO))
+        self.assertEqual([r.gstin_key for r in result.only_in_books], [GSTIN_B])
+
+    def test_the_same_supplier_is_never_called_a_mismatch(self):
+        result = self.pair_of(portal_gstin=GSTIN_A, book_gstin=GSTIN_A)
+        self.assertEqual(result.matched[0].basis, MatchBasis.INVOICE_TRAILING_NUMBER)
+        self.assertNotIn(FLAG_GSTIN_MISMATCH, result.matched[0].flags)
+        # An earlier pass always takes the same supplier first, so the pass itself also
+        # refuses one: the flag must keep meaning "the supplier differs" if that ever changes.
+        same = make_record(SOURCE_GSTR2B, 1, GSTIN_A, "7", day=16, taxable=500.0, igst=90.0)
+        other = make_record(SOURCE_BOOKS, 1, GSTIN_B, "7", day=16, taxable=500.0, igst=90.0)
+        again = make_record(SOURCE_BOOKS, 2, GSTIN_A, "7", day=16, taxable=500.0, igst=90.0)
+        reconciler = GSTR2BReconciler()
+        self.assertTrue(reconciler._admissible(same, other, MatchBasis.GSTIN_MISMATCH))
+        self.assertFalse(reconciler._admissible(same, again, MatchBasis.GSTIN_MISMATCH))
+
+    def test_two_suppliers_with_identical_documents_pair_one_to_one_whatever_the_order(self):
+        def doc(row, gstin):
+            return make_record(SOURCE_GSTR2B, row, gstin, f"A/{row}/7", day=16, taxable=500.0,
+                               igst=90.0)
+        # both read 7 after the financial-year stamp is ignored
+        book = make_record(SOURCE_BOOKS, 1, GSTIN_B, "7", day=16, taxable=500.0, igst=90.0)
+        forward = GSTR2BReconciler().reconcile([doc(1, GSTIN_A), doc(2, GSTIN_C)], [book])
+        backward = GSTR2BReconciler().reconcile([doc(2, GSTIN_C), doc(1, GSTIN_A)], [book])
+        for result in (forward, backward):
+            self.assertEqual(len(result.matched), 1)
+            self.assertEqual(result.matched[0].gstr2b.row_id, 1)
+            self.assertEqual(len(result.only_in_gstr2b), 1)
 
 
 class RealExportQuirkTests(unittest.TestCase):
